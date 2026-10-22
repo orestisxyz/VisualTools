@@ -6,7 +6,7 @@
 <title>Polychoron</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Polychoron">
 <meta name="theme-color" content="#0d0e10">
 <link rel="manifest" href="polychoron.webmanifest">
@@ -24,6 +24,7 @@
 <script>
   if (typeof p5 === 'undefined') document.getElementById('offline').style.display = 'block';
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  window.addEventListener('load', function () { setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 500); });
 </script>
 <script src="polychoron.js"></script>
 </body>

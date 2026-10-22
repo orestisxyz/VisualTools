@@ -1,5 +1,5 @@
 // keeps the instruments on the phone, so they also work without internet
-const CACHE = 'visuals-v1';
+const CACHE = 'visuals-v2';
 const FILES = ['./', 'index.html', 'polychoron.html', 'polychoron.js', 'ink.html', 'ink.js',
   'home.webmanifest', 'polychoron.webmanifest', 'ink.webmanifest',
   'icon-home-180.png', 'icon-home-192.png', 'icon-home-512.png', 'icon-poly-180.png', 'icon-poly-192.png', 'icon-poly-512.png',
