@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Polychoron</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Polychoron">
+<meta name="theme-color" content="#0d0e10">
+<link rel="manifest" href="polychoron.webmanifest">
+<link rel="apple-touch-icon" href="icon-poly-180.png">
+<link rel="icon" href="icon-poly-192.png">
+<style>
+  html, body { margin: 0; height: 100%; background: #0c0d12; overflow: hidden; overscroll-behavior: none; }
+  #offline { position: fixed; left: 0; right: 0; top: 40%; text-align: center; color: #8b9096;
+    font: 11px/1.7 ui-monospace, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; display: none; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+</head>
+<body>
+<div id="offline">connect to the internet once<br>so this can be saved for offline use</div>
+<script>
+  if (typeof p5 === 'undefined') document.getElementById('offline').style.display = 'block';
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+</script>
+<script src="polychoron.js"></script>
+</body>
+</html>
