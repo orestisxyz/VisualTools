@@ -3,7 +3,7 @@
   "short_name": "Polychoron",
   "start_url": "polychoron.html",
   "scope": "./",
-  "display": "fullscreen",
+  "display": "standalone",
   "orientation": "any",
   "background_color": "#0c0d12",
   "theme_color": "#0d0e10",

@@ -954,7 +954,7 @@ function setupKeys() {
 
 // ---------- control panel: minimal, industrial ----------
 const UI_CSS = `
-#top{position:fixed;left:0;top:0;right:0;z-index:10;pointer-events:none}
+#top{position:fixed;left:0;top:0;right:0;z-index:10;pointer-events:none;padding-top:env(safe-area-inset-top,0px)}
 #top>*{pointer-events:auto}
 #bar,#ui,#dock,#restore{-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;font:10px/1.2 ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.09em;text-transform:uppercase;
   -webkit-user-select:none;user-select:none}

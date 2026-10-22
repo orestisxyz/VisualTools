@@ -1355,7 +1355,7 @@ let ui, bar, dock, menu, amtBox, amtLabel, amtVal, amtSlider, noteEl, restoreBtn
 const CSS = `
 #bar,#dock,#menu,#note,#restore{position:fixed;z-index:10;font:10px/1.2 ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.09em;
   text-transform:uppercase;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
-#bar{left:0;right:0;top:0;display:flex;flex-wrap:wrap;gap:1px;background:#23262a;border-bottom:1px solid #34373c}
+#bar{left:0;right:0;top:0;padding-top:env(safe-area-inset-top,0px);display:flex;flex-wrap:wrap;gap:1px;background:#23262a;border-bottom:1px solid #34373c}
 #bar button,#dock button,#menu button{background:rgba(13,14,16,.9);color:#b9bdc2;border:0;border-radius:0;font:inherit;letter-spacing:inherit;
   text-transform:inherit;cursor:pointer;touch-action:manipulation}
 #bar button{flex:1 1 18%;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:7px 4px 8px;text-align:center}
@@ -1380,7 +1380,7 @@ const CSS = `
 #menu .rt{display:flex;align-items:center;gap:8px}
 #menu button.lk{background:#0d0e10;color:#5a5f65;border:1px solid #34373c;font-size:8px;padding:2px 5px}
 #menu button.lk.on{background:#e8eaec;color:#0d0e10;border-color:#e8eaec}
-#menu{left:0;top:82px;width:min(270px,92vw);max-height:calc(100vh - 230px);overflow-y:auto;background:rgba(13,14,16,.94);color:#8b9096;
+#menu{left:0;top:calc(82px + env(safe-area-inset-top,0px));width:min(270px,92vw);max-height:calc(100vh - 230px);overflow-y:auto;background:rgba(13,14,16,.94);color:#8b9096;
   border-right:1px solid #34373c;border-bottom:1px solid #34373c;display:none;touch-action:pan-y}
 #menu .tabs{display:flex;gap:1px;background:#23262a;position:sticky;top:0;z-index:2}
 #menu .tabs button{flex:1;min-width:0;padding:9px 0;color:#8b9096}

@@ -3,7 +3,7 @@
   "short_name": "Ink Field",
   "start_url": "ink.html",
   "scope": "./",
-  "display": "fullscreen",
+  "display": "standalone",
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#0d0e10",
