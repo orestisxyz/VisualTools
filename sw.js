@@ -1,9 +1,10 @@
 // keeps the instruments on the phone, so they also work without internet
-const CACHE = 'visuals-v3';
-const FILES = ['./', 'index.html', 'polychoron.html', 'polychoron.js', 'ink.html', 'ink.js',
+const CACHE = 'visuals-v5';
+const FILES = ['./', 'index.html', 'polychoron.html', 'polychoron.js', 'ink.html', 'ink.js', 'frame.html', 'frame.js', 'frame.webmanifest',
   'home.webmanifest', 'polychoron.webmanifest', 'ink.webmanifest',
   'icon-home-180.png', 'icon-home-192.png', 'icon-home-512.png', 'icon-poly-180.png', 'icon-poly-192.png', 'icon-poly-512.png',
-  'icon-ink-180.png', 'icon-ink-192.png', 'icon-ink-512.png'];
+  'icon-ink-180.png', 'icon-ink-192.png', 'icon-ink-512.png',
+  'icon-frame-180.png', 'icon-frame-192.png', 'icon-frame-512.png'];
 const P5 = 'https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js';
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES).then(() => fetch(P5, { mode: 'cors' }).then((r) => c.put(P5, r)).catch(() => {}))));
