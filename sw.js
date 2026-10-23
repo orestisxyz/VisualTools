@@ -1,5 +1,5 @@
 // keeps the instruments on the phone, so they also work without internet
-const CACHE = 'visuals-v5';
+const CACHE = 'visuals-v6';
 const FILES = ['./', 'index.html', 'polychoron.html', 'polychoron.js', 'ink.html', 'ink.js', 'frame.html', 'frame.js', 'frame.webmanifest',
   'home.webmanifest', 'polychoron.webmanifest', 'ink.webmanifest',
   'icon-home-180.png', 'icon-home-192.png', 'icon-home-512.png', 'icon-poly-180.png', 'icon-poly-192.png', 'icon-poly-512.png',
@@ -17,7 +17,7 @@ self.addEventListener('activate', (e) => {
 // the newest version when online, the saved copy when offline
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
-  e.respondWith(fetch(e.request).then((r) => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then((r) => {   // always ask the server for the newest version
     if (r && (r.ok || r.type === 'opaque')) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
     return r;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
