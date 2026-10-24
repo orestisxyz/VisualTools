@@ -2054,14 +2054,14 @@ function buildUI() {
 }
 
 function addSlider(parent, s) {
-  const [skey, label, lo, hi, step, fmt] = s;
+  const [skey, label, lo, hi, stp, fmt] = s;
   const row = el('div', 'row', parent);
   const top = el('div', 'top', row);
   el('span', '', top, label);
   const val = el('span', 'val', top);
   const inp = el('input', 'r', row);
   midiTag(row, 'sl:' + skey);
-  inp.type = 'range'; inp.min = lo; inp.max = hi; inp.step = step; inp.value = P[skey];
+  inp.type = 'range'; inp.min = lo; inp.max = hi; inp.step = stp; inp.value = P[skey];
   inp.addEventListener('input', () => { P[skey] = parseFloat(inp.value); tween = null; });
   SL[skey] = { input: inp, val, fmt: fmt || ((v) => (+v).toFixed(2)), last: '' };
 }

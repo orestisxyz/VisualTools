@@ -13,6 +13,9 @@
 //           Always: looks 1-4 (tap = recall, hold = save), rnd, page switch.
 //           Tap an effect = on / off. Hold = on only while held; drag up / down (or use a 2nd finger on the
 //           amount bar) to set its amount.
+// GROOVE    (the same as Ink Field, Frame and Body) every effect moves on the beat (or the drift tempo without music):
+//           the amount bar has dance, every ½ / 1 / 2 / 4 beats, music on / off · hit pad · react (calm / groove / wild) ·
+//           kick, snare, hats, bass and loudness each have their own job · the kick · snare · hat · beat strip
 // MENU      look (sliders, with locks so the music cannot move them) · fx · sound · source (camera, files) ·
 //           perf (quality, full screen, projector window) · help
 // SOUND     bass -> 4D depth (+ beat pulse) · mids -> relief · upper mids -> planes · treble -> size variety ·
@@ -116,7 +119,7 @@ function hsv2rgb(h, sv, v) {                // h 0..1 -> [r, g, b] 0..255
 let Q = 1, autoQ = true, targetFps = 60, resScale = 1, fpsAvg = 60, qCount = 0, qHold = 0;
 let autoBtn, fpsBtn, resBtn;
 let geoKey = '', srcKey = '', imgVersion = 0, modelVersion = 0;   // cache keys
-let imgPx = null, imgHasAlpha = false, imgMode = 0, imageBtn;
+let imgPx = null, imgHasAlpha = false, imgMode = 0, imageBtn, reactBtn = null, sndStrip = null, sndCells = {}, danceRow = null, danceSl = null, danceVal = null, rateBtn = null, fmusBtn = null, hitBtn = null, lastSnareAt = -1e9;
 const IMAGE_MODES = ['camera', 'image', 'cut-out', 'cut-out + camera'];
 let modelFull = null, modelPts = null, modelEdges = null, modelTris = null, modelDir = null, modelN = 0, modelTarget = -1; // uploaded 3D model
 const ARRS = ['stacked in 4D', 'solo'];   // solo: one single copy
@@ -271,7 +274,21 @@ function addFxRow(parent, kind, name, label) {
   menuTg[kind + ':' + name] = tg;
 }
 
+function updateSoundStrip() {
+  const tnow = performance.now();
+  for (const f of FX) { const b = fxBtns[f]; if (b) b.elt.classList.toggle('hit', fxOn[f] && tnow - (fxHit[f] || -1e9) < 130); }
+  if (!sndStrip) return;
+  const on = soundActive();
+  sndStrip.style.display = on ? '' : 'none';
+  if (!on) return;
+  const lit = (e, v) => { const a = Math.min(1, v); e.style.background = a > 0.05 ? 'rgba(255,90,31,' + (0.25 + 0.75 * a).toFixed(2) + ')' : ''; e.style.color = a > 0.4 ? '#0d0e10' : ''; };
+  lit(sndCells.kick, M.kick); lit(sndCells.snare, M.snare); lit(sndCells.hat, M.hh);
+  const live = musicLive();
+  sndCells.beat.textContent = live ? 'beat · ' + Math.round(60000 / period) : 'no beat · loudness';
+  lit(sndCells.beat, live ? pulse * 0.8 : 0);
+}
 function updateReadouts() {
+  if (frameCount % 3 === 0) updateSoundStrip();
   if (frameCount % 15 === 0) setLabel2();                               // the found tempo, on the tap button
   if (recState === 'recording') {             // running time on the record button
     const t = floor((millis() - recStart) / 1000);
@@ -362,6 +379,10 @@ function buildDock() {
   fxVal = createSpan('');
   fxVal.class('val');
   fxVal.parent(row);
+  fmusBtn = document.createElement('button'); fmusBtn.className = 'mpal'; fmusBtn.textContent = 'music · on';   // follows the music, or only the drift tempo
+  fmusBtn.dataset.mid = 'act:fmus';
+  fmusBtn.addEventListener('click', () => { if (focus && focus.kind === 'fx') { fxMus[focus.name] = !fxMus[focus.name]; fxRefresh(); } });
+  row.elt.appendChild(fmusBtn);
   fxSlider = createSlider(0, 1, 0.5, 0.01);
   fxSlider.parent(fxPanel);
   fxSlider.input(() => {
@@ -369,6 +390,20 @@ function buildDock() {
     stateOf(focus.kind).amt[focus.name] = fxSlider.value();
     fxRefresh();
   });
+  danceRow = document.createElement('div'); danceRow.className = 'mrow';     // how much its moves move it, and how often it moves
+  fxPanel.elt.appendChild(danceRow);
+  const dt0 = document.createElement('div'); dt0.className = 'top'; danceRow.appendChild(dt0);
+  const dl = document.createElement('span'); dl.textContent = 'dance · still ←→ full groove'; dt0.appendChild(dl);
+  danceVal = document.createElement('span'); danceVal.className = 'val'; dt0.appendChild(danceVal);
+  rateBtn = document.createElement('button'); rateBtn.className = 'mpal'; rateBtn.textContent = 'every 1 beat'; rateBtn.dataset.mid = 'act:rate'; dt0.appendChild(rateBtn);
+  rateBtn.addEventListener('click', () => { if (focus && focus.kind === 'fx') { fxRate[focus.name] = (fxRate[focus.name] + 1) % RATES.length; fxRefresh(); } });
+  danceSl = document.createElement('input'); danceSl.type = 'range'; danceSl.min = 0; danceSl.max = 1; danceSl.step = 0.01; danceRow.appendChild(danceSl);
+  danceSl.addEventListener('input', () => { if (focus && focus.kind === 'fx') { fxDance[focus.name] = parseFloat(danceSl.value); danceVal.textContent = fxDance[focus.name].toFixed(2); } });
+  ACTIONS['act:rate'] = () => { if (focus && focus.kind === 'fx') { fxRate[focus.name] = (fxRate[focus.name] + 1) % RATES.length; fxRefresh(); } };
+  ACTIONS['act:fmus'] = () => { if (focus && focus.kind === 'fx') { fxMus[focus.name] = !fxMus[focus.name]; fxRefresh(); } };
+  // what the app hears: the hits it finds, and whether it has the beat
+  sndStrip = document.createElement('div'); sndStrip.id = 'snd'; dock.elt.appendChild(sndStrip);
+  for (const nm of ['kick', 'snare', 'hat', 'beat']) { const c = document.createElement('span'); c.textContent = nm; sndStrip.appendChild(c); sndCells[nm] = c; }
 
   // page 1: visual effects
   pgFx = document.createElement('div');
@@ -399,13 +434,21 @@ function buildDock() {
 
   // always visible: four look slots, random, page switch
   const lr = document.createElement('div');
-  lr.className = 'pg looks';
+  lr.className = 'pg pg7 looks';
   dock.elt.appendChild(lr);
   for (let i = 0; i < 4; i++) {
     const b = dbtn(lr, String(i + 1), false);
     lookBtns.push(b);
     lookSlot(b, i);
   }
+  hitBtn = dbtn(lr, 'hit', false);                                     // a beat by hand for every effect that is on · hold = keeps hitting
+  hitBtn.elt.className = 'hitpad';
+  hitBtn.elt.dataset.mid = 'act:hit';
+  ACTIONS['act:hit'] = () => hitBeat();
+  hitBtn.elt.addEventListener('pointerdown', () => { if (midi.learn) return; hitBeat(); hitHeld = true; hitT = performance.now(); setOn(hitBtn, true); keepAwake(); });
+  const hitEnd = () => { hitHeld = false; setOn(hitBtn, false); };
+  hitBtn.elt.addEventListener('pointerup', hitEnd);
+  hitBtn.elt.addEventListener('pointercancel', hitEnd);
   const rb = dbtn(lr, 'rnd', false);
   tap(rb, 'act:rnd', randomLook);
   pageBtn = dbtn(lr, 'sound', false);
@@ -532,6 +575,16 @@ function fxRefresh() {
     fxLabel.html((focus.kind === 'ax' ? 'sound · ' + AX_LABEL[focus.name] : fxName(focus.name)) + ' · amount');
     fxVal.html(focus.name === 'filter' ? (Math.abs(v) < 0.06 ? 'off' : (v < 0 ? 'low-pass ' : 'high-pass ') + Math.abs(v).toFixed(2)) : v.toFixed(2));
     fxPanel.elt.dataset.mid = (focus.kind === 'fx' ? 'fa:' : 'aa:') + focus.name;
+    const isFx = focus.kind === 'fx';
+    danceRow.style.display = isFx ? '' : 'none';
+    fmusBtn.style.display = isFx ? '' : 'none';
+    if (isFx) {
+      danceRow.dataset.mid = 'fd:' + focus.name;
+      fmusBtn.textContent = 'music · ' + (fxMus[focus.name] ? 'on' : 'off'); fmusBtn.classList.toggle('on', !fxMus[focus.name]);
+      danceVal.textContent = fxDance[focus.name].toFixed(2);
+      if (document.activeElement !== danceSl) danceSl.value = fxDance[focus.name];
+      rateBtn.textContent = 'every ' + RATE_NAME[fxRate[focus.name]];
+    }
   }
   for (const k in menuTg) {
     const p = k.indexOf(':'), kind = k.slice(0, p), name = k.slice(p + 1), on = stateOf(kind).on[name];
@@ -556,7 +609,7 @@ let tween = null;
 function snapshot() {
   const o = { sl: {}, fxOn: Object.assign({}, fxOn), fxAmt: Object.assign({}, fxAmt), axOn: Object.assign({}, axOn), axAmt: Object.assign({}, axAmt),
     form: formMode, arr: arrMode, arrV: 2, style: styleMode, pal: palMode, fill: fillMode, lines: showLines, shapes: showShapes, locks: {}, link: linkOn, bpm,
-    view: { zoom, panX, panY, roll, rx, ry } };
+    view: { zoom, panX, panY, roll, rx, ry }, mus: Object.assign({}, fxMus), rate: Object.assign({}, fxRate), dance: Object.assign({}, fxDance) };
   for (const id of LOOK_IDS) { o.sl[id] = SL[id].sl.value(); }
   for (const id in SL) { if (SL[id].driven) o.locks[id] = !!locked[id]; }
   return o;
@@ -570,6 +623,11 @@ function applyLook(o) {
     if (o.fxAmt && Number.isFinite(o.fxAmt[f])) fxAmt[f] = o.fxAmt[f];
   }
   if (!fxOn.pull) pull.active = false;
+  for (const f of FX) {
+    if (o.mus && typeof o.mus[f] === 'boolean') fxMus[f] = o.mus[f];
+    if (o.rate && Number.isInteger(o.rate[f]) && o.rate[f] >= 0 && o.rate[f] < RATES.length) fxRate[f] = o.rate[f];
+    if (o.dance && Number.isFinite(o.dance[f])) fxDance[f] = Math.min(1, Math.max(0, o.dance[f]));
+  }
   for (const a of AX) {
     axOn[a] = !!(o.axOn && o.axOn[a]);
     if (o.axAmt && Number.isFinite(o.axAmt[a])) axAmt[a] = o.axAmt[a];
@@ -751,6 +809,7 @@ function onMidi(ev) {
   let mkey = null, v = 0;
   if (st === 0xb0) { mkey = 'cc:' + d1; v = d2 / 127; }
   else if (st === 0x90 && d2 > 0) { mkey = 'n:' + d1; v = 1; }
+  else if (st === 0x80 || (st === 0x90 && d2 === 0)) { if (!midi.learn && midi.map['n:' + d1] === 'act:hit') hitHeld = false; return; }   // a pad let go: hit stops repeating
   else return;
   if (midi.learn) {
     if (midi.target) {
@@ -770,7 +829,7 @@ function onMidi(ev) {
 
 function runTarget(id, v, mkey) {
   const p = id.indexOf(':'), kind = id.slice(0, p), name = id.slice(p + 1);
-  if ((kind === 'fx' || kind === 'fa') && !FX.includes(name)) return;
+  if ((kind === 'fx' || kind === 'fa' || kind === 'fd') && !FX.includes(name)) return;
   if ((kind === 'ax' || kind === 'aa') && !AX.includes(name)) return;
   const trig = () => {                      // a knob counts as a button when it crosses the middle
     const was = midi.prev[mkey] || 0;
@@ -781,6 +840,10 @@ function runTarget(id, v, mkey) {
     const s = SL[name].sl, lo = parseFloat(s.elt.min), hi = parseFloat(s.elt.max);
     s.value(lo + v * (hi - lo));
     if (SL[name].driven) setLock(name, true);       // a knob you touch stays yours
+  } else if (kind === 'fd') {                                          // an effect's dance
+    fxDance[name] = v; fxRefresh();
+  } else if (kind === 'act' && id === 'act:hit') {                     // hit: a pad held keeps hitting on the tempo
+    if (trig()) { hitBeat(); if (mkey.charAt(0) === 'n') { hitHeld = true; hitT = performance.now(); } }
   } else if (kind === 'fa' || kind === 'aa') {
     const k = kind === 'fa' ? 'fx' : 'ax', rg = rangeOf(k, name);
     stateOf(k).amt[name] = rg.lo + v * (rg.hi - rg.lo);
@@ -923,6 +986,8 @@ function setupKeys() {
     else if (c === 'KeyB') tapTempo();
     else if (c === 'Semicolon') { bcToggle(); setLabel2(); }
     else if (c === 'KeyN') randomLook();
+    else if (c === 'KeyM') setReact(reactMode + 1);
+    else if (c === 'Enter') { e.preventDefault(); hitBeat(); hitHeld = true; hitT = performance.now(); }
     else if (c === 'Comma') { styleMode = (styleMode + 1) % STYLES.length; refreshTop(); }
     else if (c === 'Period') { palMode = (palMode + 1) % PALS.length; refreshTop(); }
     else if (c === 'Slash') { formMode = (formMode + 1) % FORMS.length; if (formMode === 4 && !modelFull) formMode = 0; refreshTop(); }
@@ -935,6 +1000,7 @@ function setupKeys() {
     }
   });
   window.addEventListener('keyup', (e) => {
+    if (e.code === 'Enter') hitHeld = false;
     const k = keyDown[e.code];
     if (!k) return;
     delete keyDown[e.code];
@@ -1009,6 +1075,17 @@ const UI_CSS = `
 #amt{background:rgba(13,14,16,.92);border-top:1px solid #34373c;padding:8px 12px 6px;color:#8b9096}
 #dock .pg{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:#23262a;border-top:1px solid #34373c}
 #dock .pg.pg7{grid-template-columns:repeat(7,1fr)}
+#snd{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#23262a;border-top:1px solid #34373c;pointer-events:none}
+#snd span{background:rgba(13,14,16,.9);color:#5a5f65;font-size:8px;letter-spacing:.14em;text-align:center;padding:2px 0 3px;text-transform:uppercase}
+#dock button.hitpad{color:#ff5a1f}
+#dock button.hitpad.on{color:#0d0e10}
+#dock button.on.hit{background:#ffd2bf}
+#amt .top{align-items:center;gap:8px}
+#amt .top span:first-child{flex:1}
+#dock #amt button.mpal{background:#0d0e10;color:#e8eaec;border:1px solid #34373c;padding:5px 8px;touch-action:manipulation;letter-spacing:.06em;font:inherit;text-transform:inherit}
+#dock #amt button.mpal.on{background:#ff5a1f;color:#0d0e10;border-color:#ff5a1f}
+#amt .mrow{border-top:1px solid #23262a;padding-top:6px}
+#amt .mrow input[type=range]{height:34px}
 #dock button{position:relative;background:rgba(13,14,16,.9);color:#b9bdc2;border:0;border-radius:0;font:inherit;letter-spacing:inherit;
   text-transform:inherit;text-align:center;padding:14px 2px 12px;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;
   overflow:hidden;white-space:nowrap}
@@ -1056,11 +1133,7 @@ function buildUI() {
   arrBtn = bt('arrange', 'stacked in 4D', () => { arrMode = (arrMode + 1) % ARRS.length; refreshTop(); }, 'act:arr');
   styleBtn = bt('style', 'mesh', () => { styleMode = (styleMode + 1) % STYLES.length; refreshTop(); }, 'act:style');
   palBtn = bt('colour', 'original', () => { palMode = (palMode + 1) % PALS.length; refreshTop(); }, 'act:pal');
-  imageBtn = bt('image', 'camera', () => {
-    if (!imgPx) { setLabel(imageBtn, 'image', 'add in menu'); return; }
-    imgMode = (imgMode + 1) % IMAGE_MODES.length;
-    refreshTop();
-  }, 'act:image');
+  reactBtn = bt('react', 'groove', () => setReact(reactMode + 1), 'act:react');   // calm / groove / wild (the image button is in menu · source)
   playBtn = bt('music', 'play', () => { keepAwake(); togglePlay(); }, 'act:play');
   micBtn = bt('mic', 'off', () => { keepAwake(); toggleMic(); }, 'act:mic');
   recBtn = bt('rec', 'start', toggleRecord, 'act:rec');
@@ -1129,6 +1202,11 @@ function buildUI() {
   menuSection(panes.source, 'camera');
   const gc = btnGrid(panes.source);
   camBtn = mbtn(gc, 'camera · front', flipCamera, 'act:cam', true);
+  imageBtn = mbtn(gc, 'image · camera', () => {                      // camera, image, cut-out, cut-out + camera
+    if (!imgPx) { imageBtn.t.textContent = 'image · add one below first'; return; }
+    imgMode = (imgMode + 1) % IMAGE_MODES.length;
+    refreshTop();
+  }, 'act:image', true);
   menuSection(panes.source, 'music file');
   createFileInput(handleFile).parent(panes.source);
   menuSection(panes.source, 'model · obj');
@@ -1148,6 +1226,8 @@ function buildUI() {
   // sound
   menuSection(panes.sound, 'sensitivity');
   addSlider(panes.sound, 'sens', 'sound sensitivity', sensSlider, f2, false);
+  driftSlider = createSlider(0, 1, 0.5, 0.01);                          // the tempo the effects move to without music
+  addSlider(panes.sound, 'drift', 'drift · the tempo without music', driftSlider, f2, false);
   menuSection(panes.sound, 'sound rack · on the music file · two at a time');
   for (const a of AX) { addFxRow(panes.sound, 'ax', a, AX_LABEL[a]); }
   const gs = btnGrid(panes.sound);
@@ -1203,11 +1283,15 @@ function buildUI() {
   h1.class('note');
   h1.parent(panes.help);
   menuSection(panes.help, 'effects & sound');
-  const h2 = createDiv('tap · on / off<br>hold · on while held, drag up / down for the amount<br>link · sound effects follow the visual effect with the same idea (pull→filter, ghost→echo, trails→reverb, ripple→chorus)<br>two sound effects at most at once (dimmed = waiting)<br>a 2nd finger on the amount bar sets it while you hold an effect<br>all off · every visual and sound effect off<br>looks 1-4 · tap to recall, hold to save · rnd · a random look');
+  const h2 = createDiv('tap · on / off<br>hold · on while held, drag up / down for the amount<br>link · sound effects follow the visual effect with the same idea (pull→filter, ghost→echo, trails→reverb, ripple→chorus)<br>two sound effects at most at once (dimmed = waiting)<br>a 2nd finger on the amount bar sets it while you hold an effect<br>all off · every visual and sound effect off<br>looks 1-4 · tap to recall, hold to save · hit · a beat by hand for every effect that is on (hold = keeps hitting) · rnd · a random look');
   h2.class('note');
   h2.parent(panes.help);
+  menuSection(panes.help, 'the groove and the sound');
+  const hg = createDiv('every effect moves on the beat of the music (or the drift tempo without music, menu · sound · drift), each move lasting until the next. the amount bar: amount · dance = how much its moves move it · every ½ / 1 / 2 / 4 beats = how often · music on / off (off = only the drift tempo)<br>kaleido · a new slice count and a turn · ghost · the newest and oldest frames swap planes · hue · a colour cut · twist · turns the other way · strobe · a flash (never more than 3 a second) · ripple, trails, explode · breathe (steady at dance 0, half to double at full dance) · invert · flashes back to normal<br>react (top bar): calm = half as often and no hits, groove, wild = twice as often and harder hits<br>kick · the 4D depth punches out, lines thicken, explode and ripple jolt · snare / clap · the colours flash, solid / outline flips (fill auto) · hi-hats · the sizes shiver · bass · depth · loudness · how much of everything · a drop · every effect moves at once · ambient without drums: the drift tempo follows the loudness, and a swell makes the effects move<br>the strip above the effects shows what it hears: kick, snare, hat, and the beat (or: no beat · loudness)');
+  hg.class('note');
+  hg.parent(panes.help);
   menuSection(panes.help, 'keys');
-  const h3 = createDiv('q w e r t y u i o p · the ten visual effects<br>z x c v · filter, echo, reverb, chorus<br>tap a key = on / off · hold = only while held<br>↑ ↓ · amount of the last effect<br>1-4 · recall a look · shift + 1-4 · save<br>0 or backspace · panic: everything off<br>b · tap tempo · ; · beat clock auto / off · n · random look<br>, . / · style, colour, form<br>space · play / pause · h · hide · f · full screen<br>esc · show controls');
+  const h3 = createDiv('q w e r t y u i o p · the ten visual effects<br>z x c v · filter, echo, reverb, chorus<br>tap a key = on / off · hold = only while held<br>↑ ↓ · amount of the last effect<br>1-4 · recall a look · shift + 1-4 · save<br>0 or backspace · panic: everything off<br>enter · hit · m · react<br>b · tap tempo · ; · beat clock auto / off · n · random look<br>, . / · style, colour, form<br>space · play / pause · h · hide · f · full screen<br>esc · show controls');
   h3.class('note');
   h3.parent(panes.help);
   menuSection(panes.help, 'midi learn');
@@ -1224,6 +1308,8 @@ function buildUI() {
   initLift();
   bcLoad();
   setLabel2();
+  const rm = recall('react'); if (Number.isInteger(rm) && rm >= 0 && rm < 3) reactMode = rm;
+  setLabel(reactBtn, 'react', REACTS[reactMode]); setOn(reactBtn, reactMode === 2);
   midiRefresh();
   window.addEventListener('pointerdown', keepAwake, { once: true });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
@@ -1239,7 +1325,7 @@ function showTab(n) {
 function refreshTop() {
   setLabel(formBtn, 'form', FORMS[formMode]);
   setLabel(arrBtn, 'arrange', ARRS[arrMode]);
-  setLabel(imageBtn, 'image', IMAGE_MODES[imgMode]);
+  if (imageBtn) imageBtn.t.textContent = 'image · ' + IMAGE_MODES[imgMode];
   setLabel(styleBtn, 'style', STYLES[styleMode]);
   setLabel(palBtn, 'colour', PALS[palMode]);
 }
@@ -1375,7 +1461,7 @@ function handleImage(file) {
     imgMode = 1; refreshTop();
     URL.revokeObjectURL(img.src);
   };
-  img.onerror = () => setLabel(imageBtn, 'image', 'unreadable');
+  img.onerror = () => { if (imageBtn) imageBtn.t.textContent = 'image · unreadable'; };
   img.src = URL.createObjectURL(file.file);
 }
 
@@ -1594,8 +1680,10 @@ function pushHistory(px) {
 }
 
 function frameFor(l, px) {
-  if (!fxOn.echo || l === 0 || histHead < 0) return px;
-  return hist[(histHead - (l - 1) + ECHO_K * 2) % ECHO_K] || px;
+  if (!fxOn.echo || histHead < 0) return px;
+  const lag = ghostFlip ? curL - 1 - l : l;                              // ghost moves: newest and oldest swap planes
+  if (lag <= 0) return px;
+  return hist[(histHead - (lag - 1) + ECHO_K * 2) % ECHO_K] || px;
 }
 
 // ---------- video recording: the canvas + the music (or mic) sound ----------
@@ -1786,6 +1874,173 @@ function bcLabel() {
   return BC.locked ? 'auto ' + Math.round(BC.bpm) : 'auto …';
 }
 
+
+// ---------------------------------------------------------------- the groove (the same in Frame and Body): one clock every effect dances to
+// With music the clock is the beat. Without music it runs at the drift tempo, and the hit pad plays it by hand. Each effect
+// moves every ½, 1, 2 or 4 beats (its rate), and every move lasts until the next one. Dance = how much it moves.
+const RATES = [0.5, 1, 2, 4];
+const RATE_NAME = ['½ beat', '1 beat', '2 beats', '4 beats'];
+const fxRate = {}, fxDance = {}, fxLast = {}, fxDur = {}, fxMus = {}, fxHit = {}, fireN = {};
+for (const f of FX) { fxRate[f] = 1; fxDance[f] = 0.75; fxLast[f] = -1e9; fxDur[f] = 500; fxMus[f] = true; }
+fxRate.kaleido = 2; fxRate.echo = 2; fxRate.trails = 2; fxRate.twist = 2;
+let gBeatAt = -1e9, period = 500, mTick = 0, vTick = 0, mBeatAt = -1e9, mHalf = true, vT = 0;
+const beatGaps = [];
+let beatN = 0, beatHeld = false;
+let hitHeld = false, hitT = 0, ghostFlip = false, twSign = 1, twSignT = 1, hueJump = 0, curL = 2, driftSlider = null;
+function soundOn() { return soundActive(); }
+function useMusic(f) { return !!(soundOn() && fxMus[f]); }
+function musicLive() { return soundOn() && performance.now() - mBeatAt < Math.max(1500, period * 2.5); }
+function useClock(f) { return !!(musicLive() && fxMus[f]); }
+function rateOf(f) { return RATES[fxRate[f]] * [2, 1, 0.5][reactMode]; }
+function driftPeriod() {
+  const base = 2400 - 1900 * (driftSlider ? driftSlider.value() : 0.5);
+  return soundOn() ? base * (1.5 - 0.9 * M.energy) : base;               // music without a clear beat: quiet = slow, loud = fast
+}
+function env(f) { return fxOn[f] ? Math.exp(-3.2 * Math.min(4, (performance.now() - fxLast[f]) / Math.max(60, fxDur[f]))) : 0; }
+function dance(f) { return fxOn[f] ? fxDance[f] : 0; }
+// an effect's strength breathing with its moves: steady at dance 0, from half to double at full dance
+function pulseOf(f) { const d = dance(f); return (1 - 0.5 * d) + 1.5 * d * env(f); }
+function watchBeats() {
+  const now = performance.now(), snd = soundOn();
+  if (pulse > 0.95 && !beatHeld) {
+    beatHeld = true;
+    beatN++;
+    if (gBeatAt > 0) { const g = now - gBeatAt; if (g > 250 && g < 1500) { beatGaps.push(g); if (beatGaps.length > 8) beatGaps.shift(); } }
+    gBeatAt = now;
+    if (snd) { mBeatAt = now; mHalf = false; tick('m', now, false); }
+  }
+  if (pulse < 0.6) beatHeld = false;
+  if (snd) {
+    if (bcActive() && BC.periodMs) period = BC.periodMs;
+    else if (beatGaps.length >= 3) { const s = beatGaps.slice().sort((a, b) => a - b); period = s[s.length >> 1]; }
+    if (!mHalf && now - mBeatAt >= period / 2) { mHalf = true; tick('m', now, true); }
+  }
+  const vp = driftPeriod();
+  if (!vT || now - vT > vp * 4) vT = now;
+  if (now - vT >= vp / 2) { vT += vp / 2; tick('v', now, (vTick & 1) === 0); }
+  if (hitHeld && now - hitT >= (soundOn() ? period : vp)) { hitT = now; hitBeat(); }
+}
+function hitBeat() {
+  const now = performance.now();
+  for (const f of FX) { if (fxOn[f]) fire(f, now, Math.max(250, (soundOn() ? period : driftPeriod()) * rateOf(f) * 0.9)); }
+  M.kick = Math.max(M.kick, 1);
+}
+function tick(src, now, half) {
+  let n;
+  if (src === 'm') { mTick = half ? (mTick | 1) : ((mTick >> 1) + 1) << 1; n = mTick; }
+  else { vTick++; n = vTick; }
+  const per = src === 'm' ? period : driftPeriod();
+  for (const f of FX) {
+    if (!fxOn[f]) continue;
+    if ((src === 'm') !== useClock(f)) continue;
+    const every = Math.max(1, Math.round(rateOf(f) * 2));
+    if (n % every === 0) fire(f, now, per * rateOf(f));
+  }
+}
+let fireErr = false;
+function fire(f, now, dur) {
+  fxLast[f] = now; fxDur[f] = dur;
+  fireN[f] = (fireN[f] || 0) + 1;
+  fxHit[f] = now;
+  try { fireMove(f, now, dur); } catch (e) { if (!fireErr) { fireErr = true; console.error('polychoron move error (' + f + '): ' + e.message); } }
+}
+// one move of one effect
+function fireMove(f, now, dur) {
+  const d = dance(f);
+  switch (f) {
+    case 'kaleido': if (d > 0.2) kIdx = (kIdx + 1) % KN.length; kRot += 0.25 * d * (Math.random() < 0.5 ? -1 : 1); break;   // new slice count, a turn
+    case 'echo': if (d > 0.3) ghostFlip = !ghostFlip; break;               // ghost: the newest and oldest frames swap planes
+    case 'hue': hueJump += (0.5 + Math.random()) * d; break;               // a colour cut
+    case 'twist': if (d > 0.2) twSignT = -twSignT; break;                   // the twist turns the other way
+    case 'strobe': if (now - strobeLast >= 340) { strobeFlip = true; strobeLast = now; } break;
+    default: break;                                                         // ripple, trails, explode, invert breathe: pulseOf()
+  }
+}
+
+// ---------------------------------------------------------------- how the sound drives the picture (the same in Body)
+// kick = the 4D depth punches out and the lines thicken · snare / clap = the colours flash, solid / outline flips ·
+// hi-hats = the sizes shiver · bass = depth · loudness = how much of everything · drop = everything moves at once ·
+// ambient (no drums): the drift tempo follows the loudness, and a swell makes the effects move
+const REACTS = ['calm', 'groove', 'wild'];       // calm = energy only · groove = energy + hits · wild = harder hits
+let reactMode = 1;
+const M = { energy: 1, eLvl: 0, eHi: 0.16, eLo: 0, kick: 0, snare: 0, hh: 0, drop: 0, calm: 0, gain: 1, hist: [], histT: 0, lastDrop: -1e9, lastSwell: -1e9 };
+let kickN = 0, snareN = 0;
+const det = {};
+function rise(name, v) {
+  const d = det[name] || (det[name] = { prev: v, avg: 0.01, last: 0 });
+  const f = Math.max(0, v - d.prev);
+  d.prev = v;
+  return f;
+}
+function isHit(name, f, now, gap, sens) {
+  const d = det[name];
+  const hit = f > d.avg * (2.6 / sens) + 0.012 && now - d.last > gap;
+  d.avg += (f - d.avg) * 0.04;
+  if (hit) d.last = now;
+  return hit;
+}
+function mus(f) { return fxOn[f] && fxMus[f]; }
+function accent() { return [0, 1, 1.7][reactMode]; }
+function hitK() { return soundOn() ? accent() * (0.45 + 0.55 * M.gain) : 0; }
+function musicStep(k60) {
+  const now = performance.now();
+  M.kick *= Math.pow(0.86, k60); M.snare *= Math.pow(0.85, k60); M.hh *= Math.pow(0.72, k60); M.drop *= Math.pow(0.94, k60); M.calm *= Math.pow(0.992, k60);
+  if (!soundOn()) { M.gain = 1; M.energy += (1 - M.energy) * 0.05 * k60; return; }
+  let s2 = 0;
+  for (let i = 0; i < timeData.length; i++) { const v = (timeData[i] - 128) / 128; s2 += v * v; }
+  const rms = Math.sqrt(s2 / timeData.length);
+  M.eLvl += (rms - M.eLvl) * (1 - Math.pow(1 - 0.012, k60));
+  const ref = micOn ? 0.05 : 0.16;
+  M.eHi = Math.max(M.eLvl, M.eHi * Math.pow(0.9994, k60), ref * 0.4);
+  M.eLo = Math.min(M.eLvl, M.eLo + (M.eLvl - M.eLo) * 0.0006 * k60);
+  const e = Math.min(1, Math.max(0, (M.eLvl - M.eLo) / Math.max(0.02, M.eHi - M.eLo)));
+  M.energy += (e - M.energy) * (1 - Math.pow(1 - 0.03, k60));
+  const base = reactMode === 2 ? 0.5 : 0.33;
+  M.gain = base + (1 - base) * Math.pow(M.energy, 1.3);
+  M.histT += k60 / 60;
+  if (M.histT >= 0.25) {
+    M.histT = 0;
+    M.hist.push(M.energy);
+    if (M.hist.length > 28) M.hist.shift();
+    if (M.hist.length >= 24) {
+      let before = 0;
+      for (let i = 0; i < 14; i++) { before += M.hist[i]; }
+      before /= 14;
+      if (M.energy > 0.6 && M.energy - before > 0.35 && now - M.lastDrop > 10000) { M.lastDrop = now; onDrop(now); }
+      if (M.energy < 0.22 && before > 0.6 && M.calm < 0.2) { M.calm = 1;  }
+      const ago = M.hist[M.hist.length - 9];
+      if (M.energy - ago > 0.18 && now - M.lastSwell > 4000 && now - M.lastDrop > 4000) { M.lastSwell = now; onSwell(now); }
+    }
+  }
+  if (reactMode === 0) return;
+  const sens = Math.min(2, Math.max(0.4, sensSlider.value()));
+  if (isHit('kick', rise('kick', bandEnergy(40, 140)), now, 180, sens)) onKick(now);
+  const fs = rise('snare', bandEnergy(1800, 4500)), fh = rise('hat', bandEnergy(7000, 14000));
+  const sh = isHit('snare', fs, now, 140, sens);
+  if (sh && fs > fh * 0.8) onSnare(now);
+  else if (isHit('hat', fh, now, 70, sens)) M.hh = 1;
+}
+function onKick(now) { kickN++; M.kick = 1; }
+function onSnare(now) {
+  snareN++; M.snare = 1; lastSnareAt = now;
+  if (fillMode === 2 && reactMode > 0) fillState = 1 - fillState;          // auto fill flips on the snare
+  for (const f of ['strobe', 'hue', 'echo']) {
+    if (fxOn[f] && useMusic(f) && rateOf(f) <= 1 && now - fxLast[f] > period * 0.35) fire(f, now, period * rateOf(f));
+  }
+}
+function onDrop(now) {
+  M.drop = 1; M.kick = 1.4; M.snare = 1.4;
+  for (const f of FX) { if (mus(f)) fire(f, now, period * 2); }
+}
+function onSwell(now) {
+  for (const f of FX) { if (mus(f) && f !== 'strobe' && now - fxLast[f] > 600) fire(f, now, Math.max(1500, driftPeriod() * 2)); }
+}
+function setReact(i) {
+  reactMode = (i + REACTS.length) % REACTS.length;
+  store('react', reactMode);
+  if (reactBtn) { setLabel(reactBtn, 'react', REACTS[reactMode]); setOn(reactBtn, reactMode === 2); }
+}
+
 // ---------- sound rack: four soft effects on the music file ----------
 // filter = DJ filter (low-pass one way, high-pass the other), echo = tempo-synced delay with darker repeats,
 // reverb = small airy room, chorus = gentle stereo shimmer. Each is blended in (the music stays at full level),
@@ -1941,26 +2196,9 @@ function updateAudioFx() {
 }
 
 // strobe: flashes the inversion. With sound it flashes on every beat; without sound (or in a quiet part) it runs on a timer
-function updateStrobe() {
+function updateStrobe() {                                               // the flashes come from the groove (fire 'strobe'), never closer than 340 ms
   if (!fxOn.strobe) { strobeFlip = false; return; }
-  const now = millis();
-  // photosensitivity: a flash (on, then off) never repeats faster than about 3 times a second
-  const MIN_ON = 340;
-  if (soundActive() && pulse > 0.9) lastBeat = now;
-  if (soundActive() && now - lastBeat < 1500) {
-    const want = pulse > 0.45;
-    if (want && !strobeFlip) {
-      if (now - strobeLast >= MIN_ON) { strobeFlip = true; strobeLast = now; }
-    } else if (!want && strobeFlip) {
-      strobeFlip = false;
-    }
-  } else {
-    const half = bpmSet ? max(170, 30000 / bpm) : lerp(520, 170, fxAmt.strobe);   // follows the tapped tempo when there is one
-    if (now - strobeLast > half) {
-      strobeFlip = !strobeFlip;
-      strobeLast = now;
-    }
-  }
+  if (strobeFlip && performance.now() - strobeLast > 120) strobeFlip = false;
 }
 
 function soundActive() {
@@ -2122,13 +2360,16 @@ function drawFrame() {
   wasSound = nowSound;
   updateTween();
   applySound();
+  musicStep(Math.min(3, deltaTime / 16.7));
+  watchBeats();
   if (frameCount % 2 === 0) updateAudioFx();
   updateReadouts();
   updateStrobe();
-  inv = strobeFlip ? 1 - (fxOn.invert ? fxAmt.invert : 0) : (fxOn.invert ? fxAmt.invert : 0); // 0 = normal, 1 = fully inverted
+  const invA = fxOn.invert ? fxAmt.invert * (1 - dance('invert') * env('invert')) : 0;   // invert: on its moves it flashes back to normal
+  inv = strobeFlip ? 1 - invA : invA; // 0 = normal, 1 = fully inverted
   const bgR = round(lerp(12, 243, inv)), bgG = round(lerp(13, 242, inv)), bgB = round(lerp(18, 237, inv));
   if (fxOn.trails) {                       // trails: fade the old picture instead of clearing it
-    const len = soundActive() ? fxAmt.trails * (0.4 + 0.6 * sLevel) : fxAmt.trails;
+    const len = (soundActive() ? fxAmt.trails * (0.4 + 0.6 * sLevel) : fxAmt.trails) * pulseOf('trails');
     drawingContext.globalAlpha = lerp(0.5, 0.06, constrain(len, 0, 1));
     drawingContext.fillStyle = 'rgb(' + bgR + ',' + bgG + ',' + bgB + ')';
     drawingContext.fillRect(0, 0, width, height);
@@ -2149,7 +2390,7 @@ function drawFrame() {
   const h = depthSlider.value() / 2;
   const relief = reliefSlider.value();
   updateQuality();
-  const L = arrMode === 1 ? 1 : max(2, round(planesSlider.value() * (0.5 + 0.5 * (Q - 0.4) / 0.6)));
+  const L = curL = arrMode === 1 ? 1 : max(2, round(planesSlider.value() * (0.5 + 0.5 * (Q - 0.4) / 0.6)));
   const COLS = max(16, round(densitySlider.value() * Q));
   const ROWS = round(COLS * 0.75);
   const m = !showShapes ? 0 : (!showLines ? 1 : circleSlider.value()); // 0 = lines, 1 = shapes (the lines / shapes buttons can force either)
@@ -2171,9 +2412,11 @@ function drawFrame() {
     if (fxOn.hue) hueRot += 0.006 * (0.2 + 1.8 * fxAmt.hue) * k60;
     if (fxOn.ripple) { rippleT += 0.06 * k60; rippleAmp = 0.15; }
   }
-  exAmt = fxOn.explode ? fxAmt.explode * (snd ? exDrive : 0.5) : 0;
-  twAmt = fxOn.twist ? fxAmt.twist * 2.5 * (snd ? twDrive : 1) : 0;
-  rippleScale = 0.3 + 1.4 * fxAmt.ripple;
+  hueRot += hueJump * 0.25; hueJump *= 0.75;                           // hue moves: a quick colour cut
+  twSign += (twSignT - twSign) * 0.08;                                   // twist moves: it turns the other way
+  exAmt = fxOn.explode ? fxAmt.explode * (snd ? exDrive : 0.5) * pulseOf('explode') : 0;
+  twAmt = fxOn.twist ? fxAmt.twist * 2.5 * (snd ? twDrive : 1) * twSign * pulseOf('twist') : 0;
+  rippleScale = (0.3 + 1.4 * fxAmt.ripple) * pulseOf('ripple');
 
   // 1. geometry (cached: rebuilt only when form, density or model change) and camera lookups
   const px = camPx;
@@ -2396,7 +2639,7 @@ function drawFrame() {
     ctx.font = '10px ui-monospace, Menlo, monospace';
     ctx.fillText(millis() > 4000 && camSeen === 0 ? 'NO CAMERA · ALLOW IT, OR USE AN IMAGE / MODEL' : 'WAITING FOR CAMERA', 12, height - 12 - dockLift);
   }
-  const lw = weightSlider.value() * (snd ? 1 + pulse * 0.5 : 1);
+  const lw = weightSlider.value() * (snd ? 1 + Math.max(pulse * 0.2, M.kick * accent() * 0.6) : 1);   // the kick: thicker lines
   for (const bk of QS.a) {
     const pts = bk.d, len = bk.n;
     ctx.fillStyle = bk.css;
@@ -2625,17 +2868,17 @@ function applySound() {
   if (bcActive()) { if (bcTick(nowBC)) pulse = 1; }                          // the beat clock: on the predicted beats
   else if (beatCool === 0 && bass > 0.45 && bass > bassAvg * 1.2) { pulse = 1; beatCool = 10; }   // off: react to bass hits
 
-  drive('depth', constrain(0.4 + sBass * k * 6 + pulse * k * 2.5, 0, 8));
+  drive('depth', constrain(0.4 + sBass * k * 6 + Math.max(pulse * 0.4, M.kick * accent()) * k * 2.5, 0, 8));   // the kick punches the 4D depth out
   drive('relief', constrain(0.05 + sMid * k * 2, 0, 2));
-  drive('variety', constrain(0.1 + sTreble * k * 1.2, 0, 1)); // treble -> how varied the sizes are
+  drive('variety', constrain(0.1 + sTreble * k * 1.2 + M.hh * accent() * 0.35, 0, 1)); // treble -> how varied the sizes are (hats: a shiver)
   drive('circle', constrain(sLevel * k * 0.9, 0, 1));
   // saturation: louder = more vivid, and every beat flashes the colours
-  drive('saturation', constrain(0.2 + sLevel * k * 1.2 + pulse * k * 0.8, 0, 2));
+  drive('saturation', constrain(0.2 + sLevel * k * 1.2 + M.snare * accent() * k * 0.9, 0, 2));   // the snare flashes the colours
   // solid <-> outline: an on-off switch that flips on every hit in the music
   // (any beat, note or clap, not only bass), so it always reacts to the sound
   const hit = onset(k);
   fillCool = max(0, fillCool - 1);
-  if (fillCool === 0 && (hit || pulse > 0.95)) { fillState = 1 - fillState; fillCool = 9; }
+  if (reactMode > 0 && fillCool === 0 && hit && performance.now() - lastSnareAt > 3000) { fillState = 1 - fillState; fillCool = 9; }   // no snares heard: any hit flips it
 
   // planes: upper-mids (hi-hats, cymbals) change how many planes are stacked.
   // Density stays manual.
@@ -2645,14 +2888,12 @@ function applySound() {
   // effects follow the music while they are switched on
   if (fxOn.kaleido) {
     kRot += (0.004 + sBass * k * 0.05) * (0.2 + 1.6 * fxAmt.kaleido);                                 // slices turn with the bass
-    kCool = max(0, kCool - 1);
-    if (kCool === 0 && pulse > 0.8) { kIdx = (kIdx + 1) % KN.length; kCool = 20; } // new slice count on strong beats
   }
-  if (fxOn.hue) hueRot += (0.004 + sTreble * k * 0.06 + pulse * 0.08) * (0.2 + 1.8 * fxAmt.hue);
-  exDrive = constrain(sBass * 0.8 + pulse * 0.9, 0, 1.2);        // explode follows bass and beats
+  if (fxOn.hue) hueRot += (0.004 + sTreble * k * 0.06) * (0.2 + 1.8 * fxAmt.hue);
+  exDrive = constrain(sBass * 0.8 + M.kick * accent() * 0.9, 0, 1.2);        // explode follows bass and beats
   twistT += 0.03 + sMid * k * 0.12;                               // twist swings back and forth with the mids
   twDrive = Math.sin(twistT) * (0.5 + sBass * 0.8);      // colours cycle with the treble
-  if (fxOn.ripple) { rippleT += 0.05 + sMid * k * 0.2 + pulse * 0.2; rippleAmp = 0.08 + sBass * k * 0.4; } // waves with mids + bass
+  if (fxOn.ripple) { rippleT += 0.05 + sMid * k * 0.2 + pulse * 0.2; rippleAmp = 0.08 + sBass * k * 0.4 + M.kick * accent() * 0.15; } // waves with mids + bass, a jolt on the kick
 }
 
 window.setup = setup;

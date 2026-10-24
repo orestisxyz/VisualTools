@@ -6,7 +6,10 @@
 // Paste into editor.p5js.org (p5 v1 or v2). Needs WebGL2 (any recent iPhone, Android or computer browser).
 //
 // TOP BAR   source (core, motion, camera, image, field) · ink (colours) · music · mic · rec
-//           bpm (beat clock: auto / off) · freeze · mode (ink = particles, lines = the same flow drawn as long lines) · ui (hide) · menu
+//           bpm (beat clock: auto / off) · react (calm / groove / wild) · mode (ink = particles, lines = the same flow drawn as long lines) · ui (hide) · menu
+// GROOVE    (the same as Frame and Body) every effect moves on the beat (or the drift tempo without music): the amount bar has
+//           dance (how much), every ½ / 1 / 2 / 4 beats, music on / off · hit pad · kick, snare, hats, bass and loudness each
+//           have their own job · midi learn (menu · perf)
 // DOCK      burst storm swirl ribbons freeze blur strobe / explode implode vortex wind chaos mirror expose
 //           (tap = on / off, hold = only while held,
 //           drag up / down while holding = amount) · looks 1-4 (tap = recall, hold = save) · rnd · clear
@@ -42,6 +45,7 @@ const P = {                       // the settings (sliders), all saved in looks
   out: 0.5,                       // how strongly ink streams out of the core
   life: 3.0,                      // seconds each particle lives
   sens: 1.0,                      // sound sensitivity
+  move: 0.5,                      // the drift tempo (without music)
 };
 const PDEF = Object.assign({}, P);
 let LINE_K = 0.16;
@@ -61,6 +65,7 @@ const SLIDERS = [
   ['out', 'stream out of the core', 0, 1.5, 0.01],
   ['life', 'particle life · seconds', 0.5, 10, 0.1],
   ['sens', 'sound sensitivity', 0.2, 3, 0.01],
+  ['move', 'drift · the tempo without music', 0, 1, 0.01],
 ];
 const SOURCES = ['core', 'motion', 'camera', 'image', 'field'];
 const INKS = [
@@ -1087,9 +1092,195 @@ function listen(k60) {
   else if (beatCool <= 0 && bass > 0.45 && bass > bassAvg * 1.2) { pulse = 1; beatCool = 10; }   // off: react to bass hits
 }
 
+
+// ---------------------------------------------------------------- the groove (the same in Frame and Body): one clock every effect dances to
+// With music the clock is the beat. Without music it runs at the drift tempo, and the hit pad plays it by hand. Each effect
+// moves every ½, 1, 2 or 4 beats (its rate), and every move lasts until the next one. Dance = how much it moves.
+const RATES = [0.5, 1, 2, 4];
+const RATE_NAME = ['½ beat', '1 beat', '2 beats', '4 beats'];
+const fxRate = {}, fxDance = {}, fxLast = {}, fxDur = {}, fxMus = {}, fxHit = {}, fireN = {};
+for (const f of FX) { fxRate[f] = 1; fxDance[f] = 0.75; fxLast[f] = -1e9; fxDur[f] = 500; fxMus[f] = true; }
+fxRate.ribbons = 2; fxRate.swirl = 2; fxRate.vortex = 2; fxRate.wind = 3; fxRate.mirror = 3; fxRate.exposure = 3; fxRate.freeze = 2;
+let gBeatAt = -1e9, period = 500, mTick = 0, vTick = 0, mBeatAt = -1e9, mHalf = true, vT = 0;
+const beatGaps = [];
+let hitHeld = false, hitT = 0, mirrorK = 1;
+function useMusic(f) { return !!(soundOn() && fxMus[f]); }
+function musicLive() { return soundOn() && performance.now() - mBeatAt < Math.max(1500, period * 2.5); }
+function useClock(f) { return !!(musicLive() && fxMus[f]); }
+function rateOf(f) { return RATES[fxRate[f]] * [2, 1, 0.5][reactMode]; }
+function driftPeriod() {
+  const base = 2400 - 1900 * P.move;
+  return soundOn() ? base * (1.5 - 0.9 * M.energy) : base;               // music without a clear beat: quiet = slow, loud = fast
+}
+function env(f) { return fxOn[f] ? Math.exp(-3.2 * Math.min(4, (performance.now() - fxLast[f]) / Math.max(60, fxDur[f]))) : 0; }
+function dance(f) { return fxOn[f] ? fxDance[f] : 0; }
+// an effect's strength breathing with its moves: steady at dance 0, from half to double at full dance
+function pulseOf(f) { const d = dance(f); return (1 - 0.5 * d) + 1.5 * d * env(f); }
+function watchBeats() {
+  const now = performance.now(), snd = soundOn();
+  if (pulse > 0.95 && !beatHeld) {
+    beatHeld = true;
+    beatN++;
+    beatEnv = 1;
+    if (gBeatAt > 0) { const g = now - gBeatAt; if (g > 250 && g < 1500) { beatGaps.push(g); if (beatGaps.length > 8) beatGaps.shift(); } }
+    gBeatAt = now;
+    if (snd) { inkBeat(); mBeatAt = now; mHalf = false; tick('m', now, false); }
+  }
+  if (pulse < 0.6) beatHeld = false;
+  if (snd) {
+    if (bcActive() && BC.periodMs) period = BC.periodMs;
+    else if (beatGaps.length >= 3) { const s = beatGaps.slice().sort((a, b) => a - b); period = s[s.length >> 1]; }
+    if (!mHalf && now - mBeatAt >= period / 2) { mHalf = true; tick('m', now, true); }
+  }
+  const vp = driftPeriod();
+  if (!vT || now - vT > vp * 4) vT = now;
+  if (now - vT >= vp / 2) { vT += vp / 2; tick('v', now, (vTick & 1) === 0); }
+  if (hitHeld && now - hitT >= (soundOn() ? period : vp)) { hitT = now; hitBeat(); }
+}
+// the beat itself (the music's own clock): the focus racks, every 4th beat the currents change size, every 16th a burst
+function inkBeat() {
+  beatTarget.focus = -0.5 + Math.random();
+  if (beatN % 4 === 0) beatTarget.scale = Math.random();
+  if (bcActive() && beatN % 16 === 0) burstImpulse = Math.max(burstImpulse, 0.6);
+}
+function hitBeat() {
+  const now = performance.now();
+  for (const f of FX) { if (fxOn[f]) fire(f, now, Math.max(250, (soundOn() ? period : driftPeriod()) * rateOf(f) * 0.9)); }
+  M.kick = Math.max(M.kick, 1);
+  burstImpulse = Math.max(burstImpulse, 0.5);
+}
+function tick(src, now, half) {
+  let n;
+  if (src === 'm') { mTick = half ? (mTick | 1) : ((mTick >> 1) + 1) << 1; n = mTick; }
+  else { vTick++; n = vTick; }
+  const per = src === 'm' ? period : driftPeriod();
+  for (const f of FX) {
+    if (!fxOn[f]) continue;
+    if ((src === 'm') !== useClock(f)) continue;
+    const every = Math.max(1, Math.round(rateOf(f) * 2));
+    if (n % every === 0) fire(f, now, per * rateOf(f));
+  }
+}
+let fireErr = false;
+function fire(f, now, dur) {
+  fxLast[f] = now; fxDur[f] = dur;
+  fireN[f] = (fireN[f] || 0) + 1;
+  fxHit[f] = now;
+  try { fireMove(f, now, dur); } catch (e) { if (!fireErr) { fireErr = true; console.error('ink move error (' + f + '): ' + e.message); } }
+}
+// one move of one effect
+function fireMove(f, now, dur) {
+  const d = dance(f);
+  switch (f) {
+    case 'burst': burstImpulse = Math.max(burstImpulse, (0.4 + 0.9 * fxAmt.burst) * (0.4 + 0.6 * d)); break;   // an eruption on the beat
+    case 'ribbons': ribbonReset = 1; break;                                 // a new ribbon
+    case 'wind': {                                                          // the wind turns
+      const a = Math.atan2(windDir.y, windDir.x) + (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random() * 1.6) * (0.3 + 0.7 * d);
+      windDir = { x: Math.cos(a), y: Math.sin(a) };
+      break;
+    }
+    case 'mirror': if (d > 0.3) mirrorK = mirrorK % 3 + 1; break;           // 2, 4, 6 parts in turn
+    case 'strobe': if (now - strobeLast >= 340) { strobeFlip = true; strobeLast = now; } break;
+    default: break;                                                         // the rest breathe: pulseOf()
+  }
+}
+
+// ---------------------------------------------------------------- how the sound drives the picture (the same in Body)
+// kick = a puff from the core, the core and lines swell · snare / clap = the focus racks and the currents lurch ·
+// hi-hats = the ink sparkles · bass = size · loudness = how much of everything · drop = one big eruption ·
+// ambient (no drums): the drift tempo follows the loudness, and a swell makes the currents change and the core puff
+const REACTS = ['calm', 'groove', 'wild'];       // calm = energy only · groove = energy + hits · wild = harder hits
+let reactMode = 1;
+const M = { energy: 1, eLvl: 0, eHi: 0.16, eLo: 0, kick: 0, snare: 0, hh: 0, drop: 0, calm: 0, gain: 1, hist: [], histT: 0, lastDrop: -1e9, lastSwell: -1e9 };
+let kickN = 0, snareN = 0;
+const det = {};
+function rise(name, v) {
+  const d = det[name] || (det[name] = { prev: v, avg: 0.01, last: 0 });
+  const f = Math.max(0, v - d.prev);
+  d.prev = v;
+  return f;
+}
+function isHit(name, f, now, gap, sens) {
+  const d = det[name];
+  const hit = f > d.avg * (2.6 / sens) + 0.012 && now - d.last > gap;
+  d.avg += (f - d.avg) * 0.04;
+  if (hit) d.last = now;
+  return hit;
+}
+function mus(f) { return fxOn[f] && fxMus[f]; }
+function accent() { return [0, 1, 1.7][reactMode]; }
+function hitK() { return soundOn() ? accent() * (0.45 + 0.55 * M.gain) : 0; }
+function musicStep(k60) {
+  const now = performance.now();
+  M.kick *= Math.pow(0.86, k60); M.snare *= Math.pow(0.85, k60); M.hh *= Math.pow(0.72, k60); M.drop *= Math.pow(0.94, k60); M.calm *= Math.pow(0.992, k60);
+  if (!soundOn()) { M.gain = 1; M.energy += (1 - M.energy) * 0.05 * k60; return; }
+  let s2 = 0;
+  for (let i = 0; i < timeData.length; i++) { const v = (timeData[i] - 128) / 128; s2 += v * v; }
+  const rms = Math.sqrt(s2 / timeData.length);
+  M.eLvl += (rms - M.eLvl) * (1 - Math.pow(1 - 0.012, k60));
+  const ref = micOn ? 0.05 : 0.16;
+  M.eHi = Math.max(M.eLvl, M.eHi * Math.pow(0.9994, k60), ref * 0.4);
+  M.eLo = Math.min(M.eLvl, M.eLo + (M.eLvl - M.eLo) * 0.0006 * k60);
+  const e = Math.min(1, Math.max(0, (M.eLvl - M.eLo) / Math.max(0.02, M.eHi - M.eLo)));
+  M.energy += (e - M.energy) * (1 - Math.pow(1 - 0.03, k60));
+  const base = reactMode === 2 ? 0.5 : 0.33;
+  M.gain = base + (1 - base) * Math.pow(M.energy, 1.3);
+  M.histT += k60 / 60;
+  if (M.histT >= 0.25) {
+    M.histT = 0;
+    M.hist.push(M.energy);
+    if (M.hist.length > 28) M.hist.shift();
+    if (M.hist.length >= 24) {
+      let before = 0;
+      for (let i = 0; i < 14; i++) { before += M.hist[i]; }
+      before /= 14;
+      if (M.energy > 0.6 && M.energy - before > 0.35 && now - M.lastDrop > 10000) { M.lastDrop = now; onDrop(now); }
+      if (M.energy < 0.22 && before > 0.6 && M.calm < 0.2) { M.calm = 1; note('breakdown'); }
+      const ago = M.hist[M.hist.length - 9];
+      if (M.energy - ago > 0.18 && now - M.lastSwell > 4000 && now - M.lastDrop > 4000) { M.lastSwell = now; onSwell(now); }
+    }
+  }
+  if (reactMode === 0) return;
+  const sens = Math.min(2, Math.max(0.4, P.sens));
+  if (isHit('kick', rise('kick', band(40, 140)), now, 180, sens)) onKick(now);
+  const fs = rise('snare', band(1800, 4500)), fh = rise('hat', band(7000, 14000));
+  const sh = isHit('snare', fs, now, 140, sens);
+  if (sh && fs > fh * 0.8) onSnare(now);
+  else if (isHit('hat', fh, now, 70, sens)) M.hh = 1;
+}
+function onKick(now) {
+  kickN++; M.kick = 1;
+  burstImpulse = Math.max(burstImpulse, (fxOn.burst && fxMus.burst ? 0.55 : 0.28) * hitK());   // a puff from the core
+}
+function onSnare(now) {
+  snareN++; M.snare = 1;
+  beatTarget.focus = -0.5 + Math.random();                                 // the focus racks
+  for (const f of ['strobe', 'wind', 'mirror']) {
+    if (fxOn[f] && useMusic(f) && rateOf(f) <= 1 && now - fxLast[f] > period * 0.35) fire(f, now, period * rateOf(f));
+  }
+}
+function onDrop(now) {
+  M.drop = 1; M.kick = 1.4; M.snare = 1.4;
+  burstImpulse = Math.max(burstImpulse, 1.6);
+  ribbonReset = 1;
+  beatTarget.scale = Math.random();
+  for (const f of FX) { if (mus(f)) fire(f, now, period * 2); }
+  note('drop');
+}
+function onSwell(now) {
+  beatTarget.scale = Math.random();                                         // the currents change size
+  burstImpulse = Math.max(burstImpulse, 0.45);
+  for (const f of ['swirl', 'vortex', 'ribbons', 'wind']) { if (mus(f) && now - fxLast[f] > 600) fire(f, now, Math.max(1500, driftPeriod() * 2)); }
+}
+function setReact(i) {
+  reactMode = (i + REACTS.length) % REACTS.length;
+  store('react', reactMode);
+  refreshTop();
+}
+
 // ---------------------------------------------------------------- one frame
 // the strength of the new movement effects right now (0 when off)
-function fxNow(f) { return fxOn[f] ? 0.3 + fxAmt[f] * 1.2 : 0; }
+function fxNow(f) { return fxOn[f] ? (0.3 + fxAmt[f] * 1.2) * pulseOf(f) : 0; }
 let windDir = { x: 1, y: 0 };
 function setMoveUniforms(u) {
   gl.uniform1f(u.uExplode, fxNow('explode')); gl.uniform1f(u.uImplode, fxNow('implode'));
@@ -1099,19 +1290,9 @@ function setMoveUniforms(u) {
 // strobe: paper and ink swap. It always runs at the speed set by its amount; when the music has a clear beat
 // (heard in the last 1.5 s) it flashes on the beats instead. Never more than about 3 flashes a second (photosensitivity).
 let strobeFlip = false, strobeLast = 0, strobeBeat = 0, lastBeatAt = -1e9;
-function strobeOn() {
+function strobeOn() {                                                // the flashes come from the groove (fire 'strobe'), never closer than 340 ms
   if (!fxOn.strobe) { strobeFlip = false; return false; }
-  const now = performance.now();
-  if (beatN !== strobeBeat) { strobeBeat = beatN; lastBeatAt = now; }
-  const onBeats = soundOn() && now - lastBeatAt < 1500;
-  if (onBeats) {
-    if (now === lastBeatAt || (now - lastBeatAt < 40 && !strobeFlip && now - strobeLast >= 340)) { strobeFlip = true; strobeLast = now; }
-    else if (strobeFlip && now - strobeLast > 120) strobeFlip = false;
-  } else {
-    const period = Math.max(360, 1000 / (0.8 + 2.0 * fxAmt.strobe));   // 0.8 to 2.8 flashes a second
-    if (!strobeFlip && now - strobeLast >= period) { strobeFlip = true; strobeLast = now; }
-    else if (strobeFlip && now - strobeLast > Math.min(140, period * 0.45)) strobeFlip = false;
-  }
+  if (strobeFlip && performance.now() - strobeLast > 120) strobeFlip = false;
   return strobeFlip;
 }
 
@@ -1122,6 +1303,8 @@ function renderFrame() {
   const k60 = dtReal * 60;
   updateFps(dtReal);
   listen(k60);
+  musicStep(k60);
+  watchBeats();
   driveFromSound(k60);
   updateTween();
   updateReadouts();
@@ -1130,7 +1313,7 @@ function renderFrame() {
   uploadCamera();
 
   const k = P.sens, snd = soundOn();
-  const freeze = fxOn.freeze ? fxAmt.freeze : 0;
+  const freeze = fxOn.freeze ? fxAmt.freeze * (1 - 0.85 * dance('freeze') * env('freeze')) : 0;   // on its moves, time lurches forward
   const tScale = 1 - 0.95 * freeze;
   const dt = dtReal * tScale;
   simTime += dt;
@@ -1145,17 +1328,17 @@ function renderFrame() {
   }
   // bursts: the button (tap = one, hold = a stream) and the beats
   burstImpulse *= Math.pow(0.9, k60);
-  let burst = burstImpulse * 1.5 + (fxOn.burst ? fxAmt.burst * 0.8 : 0);
+  let burst = burstImpulse * 1.5 + (fxOn.burst ? fxAmt.burst * 0.3 : 0);   // burst on: eruptions on its moves, a thin stream between
   // a puff of fresh ink on every beat, and on every burst
-  const puff = Math.min(0.6, burstImpulse * 0.35 + (fxOn.burst ? fxAmt.burst * 0.1 : 0));    // a little fresh ink from the core too
+  const puff = Math.min(0.6, burstImpulse * 0.35 + (fxOn.burst ? fxAmt.burst * 0.05 : 0));    // a little fresh ink from the core too
   // ribbons: a new one now and then, and on strong beats
   ribbonCool -= dtReal;
   if (fxOn.ribbons && ribbonCool <= 0) { ribbonReset = 1; ribbonCool = 3.5 + 4 * (1 - fxAmt.ribbons); }
 
   const speed = P.speed;
   const flowScale = P.scale;
-  const swirl = fxOn.swirl ? 0.3 + fxAmt.swirl * 1.7 : 0;
-  const storm = fxOn.storm ? 0.2 + fxAmt.storm * 0.9 : 0;
+  const swirl = fxOn.swirl ? (0.3 + fxAmt.swirl * 1.7) * pulseOf('swirl') : 0;
+  const storm = fxOn.storm ? (0.2 + fxAmt.storm * 0.9) * pulseOf('storm') : 0;
   const coreR = P.core;
 
   if (drawMode === 'lines') {
@@ -1234,12 +1417,12 @@ function renderFrame() {
   gl.blendFunc(gl.ONE, gl.ONE);                                      // ink += marks
   gl.useProgram(progRender);
   const ur = progRender.u;
-  const blur = fxOn.blur ? fxAmt.blur : 0;
+  const blur = fxOn.blur ? Math.min(1.5, fxAmt.blur * pulseOf('blur')) : 0;
   const px = dpr;
   gl.uniform1f(ur.uAspect, aspect); gl.uniform1f(ur.uSize, P.size * (1 + blur * 0.5)); gl.uniform1f(ur.uPx, px);
   gl.uniform1f(ur.uDof, P.dof * (1 + blur * 3.5)); gl.uniform1f(ur.uFocus, P.focus);
   const density = Math.min(3, Math.max(0.4, (W * H) / (N * 9)));  // same darkness on any screen size and particle count
-  const inkAlpha = P.ink * INK_K * (floatInk ? 1 : 1.6) * density * dtReal * 60;
+  const inkAlpha = P.ink * INK_K * (floatInk ? 1 : 1.6) * density * dtReal * 60 * (1 + 0.6 * hitK() * M.hh);   // hi-hats: the ink sparkles
   gl.uniform1f(ur.uAlpha, inkAlpha);
   gl.uniform1f(ur.uLine, 0);
   gl.bindVertexArray(vaoRen[cur]);
@@ -1272,7 +1455,7 @@ function renderFrame() {
   gl.uniform1f(us.uGain, GAIN);
   gl.uniform1f(us.uKick, drawMode === 'lines' ? 0 : burstImpulse * 0.5);
   gl.uniform1f(us.uDot, 0); gl.uniform1f(us.uAspectS, aspect);
-  gl.uniform1f(us.uMirror, fxOn.mirror ? (fxAmt.mirror < 0.34 ? 1 : (fxAmt.mirror < 0.67 ? 2 : 3)) : 0);
+  gl.uniform1f(us.uMirror, fxOn.mirror ? (dance('mirror') > 0.3 ? mirrorK : (fxAmt.mirror < 0.34 ? 1 : (fxAmt.mirror < 0.67 ? 2 : 3))) : 0);
   gl.uniform1f(us.uFlash, strobeOn() ? 1 : 0);
   gl.uniform2f(us.uCoreUV, core.x / aspect * 0.5 + 0.5, core.y * 0.5 + 0.5);
   gl.uniform1f(us.uSoft, Math.min(1, P.soft + blur * 0.8));
@@ -1373,6 +1556,19 @@ const CSS = `
 #dock .meter{position:absolute;left:0;bottom:0;height:2px;background:#ff5a1f}
 #dock button.on .meter{background:#0d0e10}
 #vu{height:3px;background:#ff5a1f;width:0;transition:width .05s linear;pointer-events:none}
+#snd{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#23262a;border-top:1px solid #34373c;pointer-events:none}
+#snd span{background:rgba(13,14,16,.9);color:#5a5f65;font-size:8px;letter-spacing:.14em;text-align:center;padding:2px 0 3px;text-transform:uppercase}
+#dock button.hitpad{color:#ff5a1f}
+#dock button.hitpad.on{color:#0d0e10}
+#dock button.on.hit{background:#ffd2bf}
+#amt .top{gap:8px}
+#amt .top span:first-child{flex:1}
+#dock #amt button.mpal{background:#0d0e10;color:#e8eaec;border:1px solid #34373c;padding:5px 8px;touch-action:manipulation;letter-spacing:.06em}
+#dock #amt button.mpal.on{background:#ff5a1f;color:#0d0e10;border-color:#ff5a1f}
+#amt .mrow{border-top:1px solid #23262a;padding-top:6px}
+#amt .mrow input[type=range].r{height:34px}
+body.learning [data-mid]{outline:1px dashed rgba(255,90,31,.7);outline-offset:-2px}
+body.learning .pick{outline:2px solid #ff5a1f !important}
 #amt{background:rgba(13,14,16,.92);border-top:1px solid #34373c;padding:8px 12px 6px;color:#8b9096;display:none;touch-action:none}
 #amt .top,#menu .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
 #amt .val,#menu .val{color:#e8eaec}
@@ -1435,6 +1631,7 @@ function buildUI() {
     setLabel(b, cap, val);
     b.addEventListener('click', fn);
     B[skey] = b;
+    if (['source', 'ink', 'music', 'rec', 'react', 'mode', 'hide'].includes(skey)) midiTag(b, 'act:' + skey);
     return b;
   };
   bt('source', 'source', 'core', () => { srcMode = (srcMode + 1) % SOURCES.length; sourceChanged(); });
@@ -1443,7 +1640,7 @@ function buildUI() {
   bt('mic', 'mic', 'off', () => { keepAwake(); toggleMic(); });
   bt('rec', 'rec', 'start', toggleRecord);
   bt('beat', 'beat', 'auto', () => { bcToggle(); refreshTop(); });
-  bt('freeze', 'time', 'freeze', () => toggleFx('freeze'));
+  bt('react', 'react', REACTS[reactMode], () => setReact(reactMode + 1));
   bt('mode', 'mode', 'ink', () => setMode(drawMode === 'ink' ? 'lines' : 'ink'));
   bt('hide', 'ui', 'hide', () => setHidden(true));
   bt('menu', 'menu', 'open', () => openMenu(menu.style.display === 'block' ? null : 'look'));
@@ -1457,16 +1654,30 @@ function buildUI() {
   amtBox = el('div', '', dock); amtBox.id = 'amt';
   const top = el('div', 'top', amtBox);
   amtLabel = el('span', '', top); amtVal = el('span', 'val', top);
+  B.fmus = el('button', 'mpal', top, 'music · on');                    // this effect follows the music, or only the drift tempo
+  B.fmus.addEventListener('click', () => { if (focusFx) { fxMus[focusFx] = !fxMus[focusFx]; refreshFx(); } });
   amtSlider = el('input', 'r', amtBox);
   amtSlider.type = 'range'; amtSlider.min = 0; amtSlider.max = 1; amtSlider.step = 0.01;
   amtSlider.addEventListener('input', () => { if (focusFx) { fxAmt[focusFx] = parseFloat(amtSlider.value); refreshFx(); } });
+  B.drow = el('div', 'mrow', amtBox);                                  // how much the music moves it, and how often it moves
+  const dt0 = el('div', 'top', B.drow);
+  el('span', '', dt0, 'dance · still ←→ full groove');
+  B.danceVal = el('span', 'val', dt0);
+  B.rate = el('button', 'mpal', dt0, 'every 1 beat');
+  B.rate.addEventListener('click', () => { if (focusFx) { fxRate[focusFx] = (fxRate[focusFx] + 1) % RATES.length; refreshFx(); } });
+  B.dance = el('input', 'r', B.drow);
+  B.dance.type = 'range'; B.dance.min = 0; B.dance.max = 1; B.dance.step = 0.01;
+  B.dance.addEventListener('input', () => { if (focusFx) { fxDance[focusFx] = parseFloat(B.dance.value); B.danceVal.textContent = fxDance[focusFx].toFixed(2); } });
+  B.snd = el('div', '', dock); B.snd.id = 'snd';                          // what the app hears: the hits it finds, and whether it has the beat
+  for (const nm of ['kick', 'snare', 'hat', 'beat']) { B['snd_' + nm] = el('span', '', B.snd, nm); }
   meter = el('div', '', dock); meter.id = 'vu';
   const pg = el('div', 'pg fx7', dock);
   for (const f of FX) { B['fx_' + f] = holdButton(f, pg); }
-  const lr = el('div', 'pg', dock);
+  const lr = el('div', 'pg fx7', dock);
   for (let i = 0; i < 4; i++) { B['look' + i] = lookButton(i, lr); }
-  const rb = el('button', '', lr, 'rnd'); rb.addEventListener('click', randomLook);
-  const cb = el('button', '', lr, 'clear'); cb.addEventListener('click', clearInk);
+  B.hit = hitButton(lr);
+  const rb = el('button', '', lr, 'rnd'); rb.addEventListener('click', randomLook); midiTag(rb, 'act:random');
+  const cb = el('button', '', lr, 'clear'); cb.addEventListener('click', clearInk); midiTag(cb, 'act:clear');
 
   // menu
   menu = el('div', '', document.body); menu.id = 'menu';
@@ -1516,8 +1727,20 @@ function buildUI() {
   B.fs = el('button', '', gp, 'full screen');
   B.fs.addEventListener('click', goFullscreen);
   B.fps = el('div', 'note', panes.perf, '');
+  el('div', 'sec', panes.perf, 'midi');
+  const gmid = el('div', 'btns', panes.perf);
+  B.midi = el('button', 'full', gmid, 'midi · off'); B.midi.addEventListener('click', toggleMidi);
+  B.learn = el('button', '', gmid, 'learn'); B.learn.addEventListener('click', toggleLearn); midiTag(B.learn, 'act:learn');
+  const clr = el('button', '', gmid, 'clear mapping'); clr.addEventListener('click', () => { midi.map = {}; store('midi', {}); midiRefresh(); note('midi mapping cleared'); });
+  B.midiNote = el('div', 'note', panes.perf, '');
+  el('div', 'note', panes.perf, 'chrome or edge on a computer, chrome on android, or a browser app with web midi on the iphone (safari has no midi). press learn, tap any control (an effect, its amount bar or dance, a slider, hit, a look…), then move a knob or press a pad. press learn again to finish. pads: tap = on / off, hold = only while held · hit held = keeps hitting · burst: a pad = one eruption, held = a stream.');
   // help
-  el('div', 'note', panes.help).innerHTML = 'drag · stir the ink<br>tap · move the core there and burst<br>double tap · clear<br><br>dock: tap = on / off · hold = only while held, drag up / down for the amount (or a 2nd finger on the amount bar)<br>burst · the core erupts (tap = one, hold = a stream)<br>storm · rough, fast currents<br>swirl · a vortex around the core<br>ribbons · lines that leave stacked contours<br>freeze · time almost stops, the ink stays<br>blur · soft focus<br>strobe · paper and ink swap (on the beat with music, never more than 3 a second)<br>explode · everything blasts outward<br>implode · everything is sucked into the core<br>vortex · a whirlpool over the whole screen<br>wind · everything blown the way you last swiped<br>chaos · fine, rough, fast currents<br>mirror · 2, 4 or 6 symmetrical parts (the amount picks)<br>expose · long exposure: the ink stops fading<br><br>looks 1-4 · tap = recall, hold = save · rnd · random<br><br>keys: q w e r t y u = burst storm swirl ribbons freeze blur strobe · a s d g j k l = explode implode vortex wind chaos mirror expose · 1-4 looks (shift = save) · c clear · ; beat clock auto / off · b tap tempo · 0 all off · space play · h hide · f full screen · n random · m ink / lines<br><br>lines mode: the same currents and jets as the ink, drawn as long continuous lines; ink fade = tail length; particles = how many lines';
+  el('div', 'note', panes.help).innerHTML = 'drag · stir the ink<br>tap · move the core there and burst<br>double tap · clear<br><br>dock: tap = on / off · hold = only while held, drag up / down for the amount (or a 2nd finger on the amount bar)<br>the amount bar: amount · dance = how much its moves move it · every ½ / 1 / 2 / 4 beats = how often it moves · music on / off (off = only the drift tempo)<br><br>burst · the core erupts (tap = one, hold = a stream) · on: an eruption on every move<br>storm · rough, fast currents<br>swirl · a vortex around the core<br>ribbons · lines that leave stacked contours<br>freeze · time almost stops, the ink stays<br>blur · soft focus<br>strobe · paper and ink swap on its moves (and on snares), never more than 3 a second<br>explode · everything blasts outward<br>implode · everything is sucked into the core<br>vortex · a whirlpool over the whole screen<br>wind · everything blown the way you last swiped, turning on every move<br>chaos · fine, rough, fast currents<br>mirror · 2, 4 or 6 symmetrical parts (the amount picks; with dance: 2, 4, 6 in turn on its moves)<br>expose · long exposure: the ink stops fading<br>the others (storm, swirl, explode, implode, vortex, chaos, blur) breathe with their moves: steady at dance 0, from half to double at full dance · freeze: time lurches forward on its moves<br><br>the groove: every effect moves on the beat of the music (or the drift tempo without music, menu · look · drift), each move lasting until the next · react (top bar): calm = half as often and no hits, groove, wild = twice as often and harder hits<br>the sound: kick = a puff of ink from the core, the core and lines swell · snare / clap = the focus racks, the currents lurch, the glow flashes · hi-hats = the ink sparkles · bass = size · loudness = ink amount and how fast it renews · a drop = one big eruption · ambient without drums: the drift tempo follows the loudness, and a swell makes the currents change size and the core puff · the strip above the effects shows what it hears: kick, snare, hat, and the beat (or: no beat · loudness)<br><br>looks 1-4 · tap = recall, hold = save · hit · a beat by hand for every effect that is on (hold = keeps hitting) · rnd · random · clear<br><br>midi (menu · perf) · learn any control · chrome / edge / android, not safari<br><br>keys: q w e r t y u = burst storm swirl ribbons freeze blur strobe · a s d g j k l = explode implode vortex wind chaos mirror expose · enter = hit · 1-4 looks (shift = save) · c clear · ; beat clock auto / off · b tap tempo · m react · x ink / lines · 0 all off · space play · h hide · f full screen · n random<br><br>lines mode: the same currents and jets as the ink, drawn as long continuous lines; ink fade = tail length; particles = how many lines';
+  for (const s of SLIDERS) { const r = SL[s[0]]; if (r) midiTag(r.input.closest('.row'), 'sl:' + s[0]); }
+  const rm = recall('react'); if (Number.isInteger(rm) && rm >= 0 && rm < 3) reactMode = rm;
+  midi.map = recall('midi') || {};
+  setupLearnCapture();
+  midiRefresh();
   for (let i = 0; i < 4; i++) { LOOKS[i] = recall('look' + i); }
   refreshLooks();
   refreshTop();
@@ -1558,16 +1781,6 @@ function driveFromSound(k60) {
   wasSnd = snd;
   if (!snd) return;
   const k = P.sens;
-  // a beat: the moment the pulse jumps up
-  if (pulse > 0.95 && !beatHeld) {
-    beatHeld = true;
-    beatN++;
-    beatEnv = 1;
-    beatTarget.focus = -0.5 + Math.random();                           // a new focus depth on every beat
-    if (beatN % 4 === 0) beatTarget.scale = Math.random();            // new current size every 4th beat (every bar with the clock)
-    if (bcActive() && beatN % 16 === 0) burstImpulse = Math.max(burstImpulse, 0.6);   // a new phrase: a small burst
-  }
-  if (pulse < 0.6) beatHeld = false;
   beatEnv *= Math.pow(0.86, k60);
   if (tween) return;                                                   // a look is gliding in: let it finish
   const bands = { level: sLevel, bass: sBass, mid: sMid, treble: sTreble, high: sHigh, beat: beatTarget.focus + 0.5, beat4: beatTarget.scale };
@@ -1578,12 +1791,13 @@ function driveFromSound(k60) {
     const target = lo + (hi - lo) * t;
     const prev = slowF[skey] === undefined ? P[skey] : slowF[skey];
     slowF[skey] = prev + (target - prev) * (1 - Math.pow(1 - rate, k60));
-    P[skey] = slowF[skey] + (kick || 0) * beatEnv * Math.min(1.5, k);   // the beat kick on top, fading quickly
+    const hitE = skey === 'evolve' || skey === 'dof' || skey === 'soft' ? M.snare : M.kick;   // kick: core and lines swell · snare: focus, glow, the currents lurch
+    P[skey] = slowF[skey] + (kick || 0) * Math.max(beatEnv * 0.5, hitE * accent()) * Math.min(1.5, k);
   }
 }
 
 function addSlider(parent, s) {
-  const [skey, label, lo, hi, step, fmt] = s;
+  const [skey, label, lo, hi, stp, fmt] = s;
   const row = el('div', 'row', parent);
   const top = el('div', 'top', row);
   el('span', '', top, label);
@@ -1594,7 +1808,7 @@ function addSlider(parent, s) {
     lk.addEventListener('click', () => { locked[skey] = !locked[skey]; lk.textContent = locked[skey] ? 'locked' : 'free'; setOn(lk, locked[skey]); delete slowF[skey]; });
   }
   const inp = el('input', 'r', row);
-  inp.type = 'range'; inp.min = lo; inp.max = hi; inp.step = step; inp.value = P[skey];
+  inp.type = 'range'; inp.min = lo; inp.max = hi; inp.step = stp; inp.value = P[skey];
   inp.addEventListener('input', () => {
     const v = parseFloat(inp.value);
     if (skey === 'count') { setCount(v); autoQ = false; if (B.auto) { B.auto.textContent = 'auto quality · off'; setOn(B.auto, false); } }
@@ -1613,6 +1827,19 @@ function updateReadouts() {
     r.val.classList.toggle('drv', !!DRIVE[k] && !locked[k] && soundOn());
   }
   if (B.beat && roTick % 15 === 0) { setLabel(B.beat, 'bpm', bcLabel()); setOn(B.beat, bcActive()); }
+  const tnow = performance.now();
+  for (const f of FX) { const b = B['fx_' + f]; if (b) b.classList.toggle('hit', fxOn[f] && tnow - (fxHit[f] || -1e9) < 130); }
+  if (B.snd) {
+    const on = soundOn();
+    B.snd.style.display = on ? '' : 'none';
+    if (on) {
+      const lit = (e, v) => { const a = Math.min(1, v); e.style.background = a > 0.05 ? 'rgba(255,90,31,' + (0.25 + 0.75 * a).toFixed(2) + ')' : ''; e.style.color = a > 0.4 ? '#0d0e10' : ''; };
+      lit(B.snd_kick, M.kick); lit(B.snd_snare, M.snare); lit(B.snd_hat, M.hh);
+      const live = musicLive();
+      B.snd_beat.textContent = live ? 'beat · ' + Math.round(60000 / period) : 'no beat · loudness';
+      lit(B.snd_beat, live ? pulse * 0.8 : 0);
+    }
+  }
   if (meter) {                                                       // the thin orange line above the dock = what the music is doing
     const lv = soundOn() ? Math.min(1, sLevel * 0.8 + pulse * 0.4) : 0;
     meter.style.width = Math.round(lv * 100) + '%';
@@ -1667,7 +1894,7 @@ function refreshTop() {
   if (B.beat) { setLabel(B.beat, 'bpm', bcLabel()); setOn(B.beat, bcActive()); }
   setLabel(B.source, 'source', SOURCES[srcMode]);
   setLabel(B.ink, 'ink', INKS[inkMode].name);
-  setOn(B.freeze, fxOn.freeze);
+  setLabel(B.react, 'react', REACTS[reactMode]); setOn(B.react, reactMode === 2);
   setLabel(B.mode, 'mode', drawMode);
   setLabel(B.source, 'source', drawMode === 'lines' ? 'core' : SOURCES[srcMode]);
   if (B.cam) B.cam.textContent = camOn ? 'camera · ' + (camFacing === 'user' ? 'front · tap to flip' : 'back · tap to flip') : 'camera · start';
@@ -1676,6 +1903,7 @@ function refreshTop() {
 // dock buttons: tap = on / off, hold = only while held (drag up / down = amount)
 function holdButton(name, parent) {
   const b = el('button', '', parent, FX_LABEL[name] || name);
+  midiTag(b, 'fx:' + name);
   const m = el('i', 'meter', b);
   b.meter = m;
   let timer = null, held = false, prev = false, y0 = 0, a0 = 0, pressed = false;
@@ -1721,11 +1949,25 @@ function refreshFx() {
   const show = focusFx && (fxOn[focusFx] || peek);
   amtBox.style.display = show ? 'block' : 'none';
   if (show) {
-    amtLabel.textContent = focusFx + ' · amount';
+    amtLabel.textContent = (FX_LABEL[focusFx] || focusFx) + ' · amount';
     amtVal.textContent = fxAmt[focusFx].toFixed(2);
+    midiTag(amtSlider, 'fa:' + focusFx); midiTag(B.drow, 'fd:' + focusFx); midiTag(B.rate, 'act:rate'); midiTag(B.fmus, 'act:fmus');
+    B.fmus.textContent = 'music · ' + (fxMus[focusFx] ? 'on' : 'off'); setOn(B.fmus, !fxMus[focusFx]);
+    B.danceVal.textContent = fxDance[focusFx].toFixed(2);
+    if (document.activeElement !== B.dance) B.dance.value = fxDance[focusFx];
+    B.rate.textContent = 'every ' + RATE_NAME[fxRate[focusFx]];
     if (document.activeElement !== amtSlider) amtSlider.value = fxAmt[focusFx];
   }
-  if (B.freeze) refreshTop();
+}
+// the hit pad: tap = a beat by hand for every effect that is on · hold = keeps hitting on the tempo
+function hitButton(parent) {
+  const b = el('button', 'hitpad', parent, 'hit');
+  midiTag(b, 'act:hit');
+  b.addEventListener('pointerdown', () => { hitBeat(); hitHeld = true; hitT = performance.now(); setOn(b, true); keepAwake(); });
+  const end = () => { hitHeld = false; setOn(b, false); };
+  b.addEventListener('pointerup', end);
+  b.addEventListener('pointercancel', end);
+  return b;
 }
 function panic() {
   for (const f of FX) { fxOn[f] = false; }
@@ -1737,7 +1979,7 @@ function panic() {
 // looks: four saved states
 const LOOKS = [null, null, null, null];
 let tween = null, curLook = -1;
-function snapshot() { return { P: Object.assign({}, P), fxOn: Object.assign({}, fxOn), fxAmt: Object.assign({}, fxAmt), src: srcMode, ink: inkMode, mode: drawMode }; }
+function snapshot() { return { P: Object.assign({}, P), fxOn: Object.assign({}, fxOn), fxAmt: Object.assign({}, fxAmt), src: srcMode, ink: inkMode, mode: drawMode, mus: Object.assign({}, fxMus), rate: Object.assign({}, fxRate), dance: Object.assign({}, fxDance) }; }
 function store(k, v) { try { localStorage.setItem('ink_' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
 function recall(k) { try { const v = localStorage.getItem('ink_' + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
 function applySettings(np) {
@@ -1762,6 +2004,11 @@ function applyLook(o) {
     if (o.fxOn && typeof o.fxOn[f] === 'boolean') fxOn[f] = o.fxOn[f];
     if (o.fxAmt && Number.isFinite(o.fxAmt[f])) fxAmt[f] = o.fxAmt[f];
   }
+  for (const f of FX) {
+    if (o.mus && typeof o.mus[f] === 'boolean') fxMus[f] = o.mus[f];
+    if (o.rate && Number.isInteger(o.rate[f]) && o.rate[f] >= 0 && o.rate[f] < RATES.length) fxRate[f] = o.rate[f];
+    if (o.dance && Number.isFinite(o.dance[f])) fxDance[f] = Math.min(1, Math.max(0, o.dance[f]));
+  }
   if (Number.isInteger(o.ink) && o.ink >= 0 && o.ink < INKS.length) inkMode = o.ink;
   if (Number.isInteger(o.src) && o.src >= 0 && o.src < SOURCES.length) { srcMode = o.src; sourceChanged(); }
   refreshFx(); refreshTop();
@@ -1781,6 +2028,7 @@ function refreshLooks() {
 }
 function lookButton(i, parent) {
   const b = el('button', '', parent, String(i + 1));
+  midiTag(b, 'act:look' + i);
   let timer = null, pressed = false, saved = false;
   b.addEventListener('pointerdown', () => { pressed = true; saved = false; clearTimeout(timer); timer = setTimeout(() => { saved = true; saveLook(i); }, 600); });
   const end = (cancel) => { clearTimeout(timer); if (!pressed) return; pressed = false; if (!saved && !cancel) recallLook(i); };
@@ -1877,11 +2125,14 @@ function setupKeys() {
     else if (c === 'Space') { e.preventDefault(); if (micOn) toggleMic(); else togglePlay(); }
     else if (c === 'KeyF') goFullscreen();
     else if (c === 'KeyN') randomLook();
-    else if (c === 'KeyM') setMode(drawMode === 'ink' ? 'lines' : 'ink');
+    else if (c === 'KeyX') setMode(drawMode === 'ink' ? 'lines' : 'ink');
+    else if (c === 'KeyM') setReact(reactMode + 1);
+    else if (c === 'Enter') { e.preventDefault(); hitBeat(); hitHeld = true; hitT = performance.now(); }
     else if (c === 'Semicolon') { bcToggle(); refreshTop(); }
     else if (c === 'KeyB') { bcTap(performance.now()); refreshTop(); }
   });
   window.addEventListener('keyup', (e) => {
+    if (e.code === 'Enter') hitHeld = false;
     const k = keyDown[e.code], f = KEY_FX[e.code];
     if (!k) return;
     delete keyDown[e.code];
@@ -1892,6 +2143,130 @@ function setupKeys() {
     refreshFx();
   });
   window.addEventListener('blur', () => { for (const c in keyDown) { fxOn[KEY_FX[c]] = keyDown[c].was; delete keyDown[c]; } refreshFx(); });
+}
+
+
+// ---------------------------------------------------------------- midi: learn any control (Chrome / Edge on a computer, Chrome on Android,
+// or a browser app with Web MIDI on the iPhone; Safari has no MIDI). Press learn, tap a control on the screen, move a knob or press a pad.
+const midi = { access: null, on: false, learn: false, map: {}, target: null, prev: {}, ok: !!navigator.requestMIDIAccess };
+const ACTIONS = {
+  'act:hit': () => hitBeat(),
+  'act:react': () => setReact(reactMode + 1),
+  'act:source': () => { srcMode = (srcMode + 1) % SOURCES.length; sourceChanged(); },
+  'act:ink': () => { inkMode = (inkMode + 1) % INKS.length; refreshTop(); },
+  'act:mode': () => setMode(drawMode === 'ink' ? 'lines' : 'ink'),
+  'act:music': () => togglePlay(),
+  'act:rec': () => toggleRecord(),
+  'act:hide': () => setHidden(!hidden),
+  'act:panic': () => panic(),
+  'act:random': () => randomLook(),
+  'act:clear': () => clearInk(),
+  'act:rate': () => { if (focusFx) { fxRate[focusFx] = (fxRate[focusFx] + 1) % RATES.length; refreshFx(); } },
+  'act:fmus': () => { if (focusFx) { fxMus[focusFx] = !fxMus[focusFx]; refreshFx(); } },
+  'act:look0': () => recallLook(0), 'act:look1': () => recallLook(1), 'act:look2': () => recallLook(2), 'act:look3': () => recallLook(3),
+};
+function midiTag(elm, id) { if (elm) elm.dataset.mid = id; return elm; }
+async function toggleMidi() {
+  if (!midi.ok) { note('this browser has no midi (safari) · use chrome on a computer or android'); midiRefresh(); return; }
+  if (midi.access) { midi.on = !midi.on; midiRefresh(); return; }
+  if (B.midi) B.midi.textContent = 'midi · …';
+  try {
+    midi.access = await navigator.requestMIDIAccess();
+    midi.on = true;
+    const hook = () => { for (const inp of midi.access.inputs.values()) { inp.onmidimessage = onMidi; } midiRefresh(); };
+    midi.access.onstatechange = hook;
+    hook();
+  } catch (e) { if (B.midi) B.midi.textContent = 'midi · blocked'; }
+}
+function midiRefresh() {
+  if (!B.midi) return;
+  const n = midi.access ? Array.from(midi.access.inputs.values()).length : 0;
+  B.midi.textContent = !midi.ok ? 'midi · not in this browser' : (midi.on ? 'midi · on · ' + n + ' in' : 'midi · off');
+  setOn(B.midi, midi.on);
+  setOn(B.learn, midi.learn);
+  B.learn.textContent = midi.learn ? 'learn · done' : 'learn';
+  const cnt = Object.keys(midi.map).length;
+  if (B.midiNote) B.midiNote.textContent = cnt + ' controls mapped' + (midi.ok ? (midi.on ? '' : ' · midi is off') : ' · (safari has no midi: the mapping waits for a browser that has it)');
+}
+function toggleLearn() {
+  if (!midi.ok) { note('this browser has no midi'); return; }
+  if (!midi.on) toggleMidi();
+  midi.learn = !midi.learn;
+  if (!midi.learn) midi.target = null;
+  document.body.classList.toggle('learning', midi.learn);
+  document.querySelectorAll('.pick').forEach((e) => e.classList.remove('pick'));
+  if (midi.learn) note('learn: tap a control, then move a knob or press a pad');
+  midiRefresh();
+}
+function onMidi(ev) {
+  if (!midi.on) return;
+  const d = ev.data;
+  if (!d || d.length < 2) return;
+  const st = d[0] & 0xf0, d1 = d[1], d2 = d.length > 2 ? d[2] : 0;
+  let mkey = null, v = 0;
+  if (st === 0xb0) { mkey = 'cc:' + d1; v = d2 / 127; }
+  else if (st === 0x90 && d2 > 0) { mkey = 'n:' + d1; v = 1; }
+  else if (st === 0x80 || (st === 0x90 && d2 === 0)) { mkey = 'n:' + d1; v = 0; }   // a pad let go (for hold)
+  else return;
+  if (midi.learn) {
+    if (midi.target && v > 0) {
+      midi.map[mkey] = midi.target;
+      store('midi', midi.map);
+      note('mapped · ' + midi.target.replace(':', ' · '));
+      midi.target = null;
+      document.querySelectorAll('.pick').forEach((e) => e.classList.remove('pick'));
+      midiRefresh();
+    }
+    return;
+  }
+  const id = midi.map[mkey];
+  if (id) { try { runTarget(id, v, mkey); } catch (e) { /* a stale mapping must never stop the show */ } }
+}
+function runTarget(id, v, mkey) {
+  const p = id.indexOf(':'), kind = id.slice(0, p), name = id.slice(p + 1);
+  const isNote = mkey.charAt(0) === 'n';
+  const trig = () => {                                                  // a knob counts as a button when it crosses the middle
+    const was = midi.prev[mkey] || 0;
+    midi.prev[mkey] = v;
+    return isNote ? v > 0 : (was < 0.5 && v >= 0.5);
+  };
+  if (kind === 'sl' && SL[name]) {                                      // a slider of the menu
+    const s = SL[name].input, lo = parseFloat(s.min), hi = parseFloat(s.max);
+    if (name === 'count') setCount(lo + v * (hi - lo)); else { P[name] = lo + v * (hi - lo); delete slowF[name]; if (restP) restP[name] = P[name]; }
+    tween = null;
+  } else if (kind === 'fa' && FX.includes(name)) { fxAmt[name] = v; refreshFx(); }        // an effect's amount
+  else if (kind === 'fd' && FX.includes(name)) { fxDance[name] = v; refreshFx(); }       // an effect's dance
+  else if (kind === 'fx' && name === 'burst') {                       // burst: a pad = one eruption, held = a stream
+    if (isNote) { if (v > 0) { burstImpulse = Math.max(burstImpulse, 0.8 + fxAmt.burst); fxOn.burst = true; } else fxOn.burst = false; refreshFx(); }
+    else if (trig()) burstImpulse = Math.max(burstImpulse, 0.8 + fxAmt.burst);
+  }
+  else if (kind === 'fx' && FX.includes(name)) {                       // an effect: pad = on / off (held long = only while held)
+    if (isNote) {
+      if (v > 0) { midi.prev['t' + mkey] = performance.now(); midi.prev['w' + mkey] = fxOn[name]; fxOn[name] = !fxOn[name]; focusFx = name; refreshFx(); }
+      else if (performance.now() - (midi.prev['t' + mkey] || 0) > 350) { fxOn[name] = midi.prev['w' + mkey]; refreshFx(); }
+    } else if (trig()) { fxOn[name] = !fxOn[name]; refreshFx(); }
+  } else if (kind === 'act' && id === 'act:hit') {                     // hit: a pad held keeps hitting on the tempo
+    if (isNote) { if (v > 0) { hitBeat(); hitHeld = true; hitT = performance.now(); } else hitHeld = false; }
+    else if (trig()) hitBeat();
+  } else if (kind === 'act' && ACTIONS[id]) { if (trig()) ACTIONS[id](); }
+}
+// while learning, a tap on a control picks it instead of using it
+function setupLearnCapture() {
+  for (const evn of ['pointerdown', 'pointerup', 'click', 'mousedown', 'touchstart', 'input']) {
+    document.addEventListener(evn, (e) => {
+      if (!midi.learn) return;
+      const t = e.target.closest ? e.target.closest('[data-mid]') : null;
+      if (!t || t.dataset.mid === 'act:learn') return;                 // the learn button itself, the menu and its tabs keep working
+      e.stopPropagation(); e.preventDefault();
+      if (evn !== 'pointerdown') return;
+      midi.target = t.dataset.mid;
+      document.querySelectorAll('.pick').forEach((x) => x.classList.remove('pick'));
+      t.classList.add('pick');
+      const m = /^fx:(.+)$/.exec(midi.target);
+      if (m) { focusFx = m[1]; peek = true; refreshFx(); }             // so its amount and dance can be picked next
+      note('now move a knob or press a pad');
+    }, true);
+  }
 }
 
 // ---------------------------------------------------------------- p5 entry points
